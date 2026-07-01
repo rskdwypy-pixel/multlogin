@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>合并功能测试页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #3367d6;
+        }
+        .info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 13px;
+        }
+        .success {
+            background: #d4edda;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #155724;
+        }
+        .warning {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #856404;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .feature-list {
+            margin-top: 20px;
+        }
+        .feature-list h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+        .feature-list ul {
+            list-style: none;
+            padding: 0;
+        }
+        .feature-list li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .feature-list li:last-child {
+            border-bottom: none;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 8px;
+        }
+        .badge-success { background: #d4edda; color: #155724; }
+        .badge-info { background: #d1ecf1; color: #0c5460; }
+        .badge-warning { background: #ffc107; color: #000; }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h2>🔐 Multi Login & Password Manager Pro - 测试页面</h2>
+
+        <div class="info">
+            <strong>📋 测试说明：</strong><br>
+            此页面用于测试合并后的扩展功能。请确保：
+            1. 扩展已在Chrome中正确加载
+            2. Content script已注入到页面
+            3. Password Manager模块已加载
+        </div>
+
+        <div class="feature-list">
+            <h3>✨ 合并后的功能特性：</h3>
+            <ul>
+                <li>
+                    🔄 Multi账号隔离 <span class="badge badge-success">multilogin</span>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">Cookie隔离、Profile隔离、Title隔离</div>
+                </li>
+                <li>
+                    🔐 Chrome风格自动填充 <span class="badge badge-success">password manager</span>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">实时搜索、键盘导航、防抖优化</div>
+                </li>
+                <li>
+                    💾 自动保存密码 <span class="badge badge-success">password manager</span>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">左上角气泡提示、更新检测</div>
+                </li>
+                <li>
+                    🔒 密码加密存储 <span class="badge badge-info">password manager</span>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">XOR加密、本地存储</div>
+                </li>
+                <li>
+                    📥 CSV导入导出 <span class="badge badge-info">password manager</span>
+                    <div style="font-size: 11px; color: #666; margin-top: 4px;">兼容Chrome密码格式</div>
+                </li>
+            </ul>
+        </div>
+
+        <div class="success">
+            <strong>✅ 合并完成状态：</strong><br>
+            • content.js - 合并成功（multilogin核心 + 密码管理器）<br>
+            • autoSave.js - 已加载<br>
+            • passwordManager.js - 已加载<br>
+            • popup.html/js - 已更新<br>
+            • background.js - 消息处理已修复<br>
+            • manifest.json - 已更新
+        </div>
+
+        <form id="login-form">
+            <div class="form-group">
+                <label for="username">用户名</label>
+                <input type="text" id="username" name="username" placeholder="输入测试用户名" autocomplete="off">
+            </div>
+
+            <div class="form-group">
+                <label for="password">密码</label>
+                <input type="password" id="password" name="password" placeholder="输入测试密码" autocomplete="off">
+            </div>
+
+            <button type="submit">登录测试</button>
+        </form>
+
+        <div class="status" id="status">
+            <strong>🔍 测试状态：</strong><br>
+            <div id="status-indicators">
+                <span class="badge badge-info">等待测试</span>
+            </div>
+        </div>
+
+        <div class="warning">
+            <strong>⚠️ 测试步骤：</strong><br>
+            1. 点击用户名输入框，检查是否出现自动填充下拉框<br>
+            2. 输入第一个字母，检查是否实时过滤账号<br>
+            3. 使用上下箭头键导航，按Enter选择<br>
+            4. 提交表单，检查左上角是否出现保存提示<br>
+            5. 修改密码后再次提交，检查是否提示更新
+        </div>
+    </div>
+
+    <script>
+        // 监控表单提交
+        document.getElementById('login-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            if (username && password) {
+                updateStatus('success', '表单已提交，请检查左上角保存提示');
+
+                // 模拟登录成功
+                setTimeout(function() {
+                    updateStatus('success', '登录成功！');
+                    document.getElementById('status').innerHTML += '<br><strong>📋 检查左上角是否出现保存/更新提示</strong>';
+
+                    // 显示用户信息
+                    document.querySelector('.test-container').innerHTML += `
+                        <div style="margin-top: 20px; padding: 15px; background: #e8f5e8; border-radius: 4px;">
+                            <strong>✅ 登录成功！</strong><br>
+                            用户名: ${username}<br>
+                            登录时间: ${new Date().toLocaleString()}
+                        </div>
+                    `;
+                }, 500);
+            } else {
+                updateStatus('warning', '请输入用户名和密码');
+            }
+        });
+
+        function updateStatus(type, message) {
+            const indicator = document.getElementById('status-indicators');
+            const badgeClass = 'badge-' + type;
+            indicator.innerHTML = '<span class="badge ' + badgeClass + '">' + message + '</span>';
+        }
+
+        // 监听模块加载状态
+        let autoSaveDetected = false;
+        const checkInterval = setInterval(function() {
+            if (window.pmAutoSaveModuleLoaded) {
+                autoSaveDetected = true;
+                updateStatus('success', '自动保存模块已加载');
+                clearInterval(checkInterval);
+            }
+        }, 100);
+
+        setTimeout(function() {
+            if (!autoSaveDetected) {
+                clearInterval(checkInterval);
+                updateStatus('warning', '提示：请确保扩展已正确加载');
+            }
+        }, 3000);
+
+        // 监听MultiLogin模块
+        setTimeout(function() {
+            if (typeof chrome !== 'undefined' && chrome.runtime) {
+                console.log('✅ Chrome Runtime API可用');
+                updateStatus('info', 'Chrome API可用');
+            } else {
+                updateStatus('warning', 'Chrome API不可用');
+            }
+        }, 1000);
+    </script>
+</body>
+</html>

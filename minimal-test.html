@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Minimal Test</title>
+</head>
+<body>
+    <h2>🧪 PasswordManager 模块测试</h2>
+    <div id="log"></div>
+
+    <script src="passwordManager.js"></script>
+    <script>
+        function log(msg) {
+            const div = document.createElement('div');
+            div.textContent = msg;
+            document.getElementById('log').appendChild(div);
+            console.log(msg);
+        }
+
+        log('开始测试...');
+
+        // 检查模块是否加载
+        if (typeof PasswordManager !== 'undefined') {
+            log('✅ PasswordManager模块已加载');
+            log('可用方法: ' + Object.keys(PasswordManager).join(', '));
+
+            // 测试getAllPasswords
+            log('测试getAllPasswords方法...');
+            PasswordManager.getAllPasswords(function(passwords) {
+                log('✅ getAllPasswords成功，返回 ' + passwords.length + ' 个密码');
+                console.log('密码列表:', passwords);
+            }).catch(function(error) {
+                log('❌ getAllPasswords失败: ' + error);
+            });
+        } else {
+            log('❌ PasswordManager模块未加载');
+        }
+    </script>
+</body>
+</html>

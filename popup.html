@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>密码管理器</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 500px;
+            min-height: 450px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f8f9fa;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .header p {
+            font-size: 12px;
+            opacity: 0.9;
+        }
+
+        .tabs {
+            display: flex;
+            background: white;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 15px;
+            text-align: center;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+            font-size: 13px;
+            font-weight: 500;
+            color: #666;
+        }
+
+        .tab:hover {
+            background: #f8f9fa;
+        }
+
+        .tab.active {
+            border-bottom-color: #667eea;
+            color: #667eea;
+        }
+
+        .content {
+            padding: 20px;
+            max-height: 450px;
+            overflow-y: auto;
+        }
+
+        .section {
+            display: none;
+        }
+
+        .section.active {
+            display: block;
+        }
+
+        /* 搜索框样式 */
+        .search-box {
+            margin-bottom: 20px;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .search-box input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        /* 密码项目样式 */
+        .password-item {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 12px;
+            transition: all 0.2s;
+        }
+
+        .password-item:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            transform: translateY(-2px);
+        }
+
+        .password-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .password-item-name {
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .password-item-domain {
+            font-size: 11px;
+            color: #999;
+            margin-top: 2px;
+        }
+
+        .password-item-detail {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+
+        .password-item-detail strong {
+            color: #333;
+        }
+
+        .password-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        /* 按钮样式 */
+        .btn {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+
+        .btn-small {
+            padding: 6px 10px;
+            font-size: 11px;
+        }
+
+        /* 导入导出区域 */
+        .import-export-area {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+        }
+
+        .import-export-area h3 {
+            font-size: 15px;
+            color: #333;
+            margin-bottom: 12px;
+        }
+
+        .import-export-area p {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            resize: vertical;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        /* 统计卡片 */
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+        }
+
+        /* 空状态 */
+        .empty-state {
+            text-align: center;
+            padding: 50px 20px;
+            color: #666;
+        }
+
+        .empty-state-icon {
+            font-size: 60px;
+            margin-bottom: 15px;
+        }
+
+        .empty-state-text {
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+
+        .empty-state-subtext {
+            font-size: 12px;
+            color: #999;
+        }
+
+        /* 警告框 */
+        .alert {
+            padding: 12px 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 13px;
+        }
+
+        .alert-success {
+            background: #d1fae5;
+            color: #065f46;
+            border: 1px solid #10b981;
+        }
+
+        .alert-error {
+            background: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #ef4444;
+        }
+
+        .alert-info {
+            background: #dbeafe;
+            color: #1e40af;
+            border: 1px solid #3b82f6;
+        }
+
+        /* 隐藏元素 */
+        .hidden {
+            display: none !important;
+        }
+
+        /* 加载状态 */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .spinner {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* 设置样式 */
+        .setting-item {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 12px;
+        }
+
+        .setting-label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .setting-checkbox {
+            margin-right: 12px;
+            width: 18px;
+            height: 18px;
+        }
+
+        .setting-text {
+            flex: 1;
+        }
+
+        .setting-title {
+            font-weight: 500;
+            color: #333;
+            margin-bottom: 3px;
+        }
+
+        .setting-description {
+            font-size: 12px;
+            color: #666;
+        }
+
+        /* 滚动条样式 */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔐 密码管理器 Pro</h1>
+        <p>安全、便捷的密码管理解决方案</p>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" data-tab="passwords">密码库</div>
+        <div class="tab" data-tab="import-export">导入/导出</div>
+        <div class="tab" data-tab="settings">设置</div>
+        <div class="tab" data-tab="debug">调试</div>
+    </div>
+
+    <div class="content">
+        <!-- 密码库部分 -->
+        <div class="section active" id="passwords-section">
+            <div class="search-box">
+                <input type="text" id="search-input" placeholder="🔍 搜索密码（按名称、域名、用户名）...">
+            </div>
+
+            <div id="stats-container" class="stats">
+                <div class="stat-card">
+                    <div class="stat-number" id="total-passwords">0</div>
+                    <div class="stat-label">总密码数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="total-domains">0</div>
+                    <div class="stat-label">域名数</div>
+                </div>
+            </div>
+
+            <div id="passwords-list"></div>
+            <div id="passwords-loading" class="loading hidden">
+                <div class="spinner"></div>
+                <div>加载中...</div>
+            </div>
+        </div>
+
+        <!-- 导入/导出部分 -->
+        <div class="section" id="import-export-section">
+            <div class="import-export-area">
+                <h3>📥 导入密码</h3>
+                <p>支持Chrome密码管理器导出的CSV格式：<br>
+                <code>name,url,username,password,note</code></p>
+
+                <textarea id="import-text" placeholder="name,url,username,password,note"></textarea>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" id="import-btn">导入密码</button>
+                    <button class="btn btn-secondary" id="load-file-btn">📁 从文件导入</button>
+                </div>
+                <input type="file" id="file-input" accept=".csv" style="display: none;">
+            </div>
+
+            <div class="import-export-area">
+                <h3>📤 导出密码</h3>
+                <p>导出为Chrome密码管理器兼容的CSV格式</p>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" id="export-btn">导出密码</button>
+                    <button class="btn btn-secondary" id="copy-btn">📋 复制到剪贴板</button>
+                </div>
+
+                <textarea id="export-text" class="hidden" readonly></textarea>
+            </div>
+
+            <div id="alert-container"></div>
+        </div>
+
+        <!-- 设置部分 -->
+        <div class="section" id="settings-section">
+            <div class="setting-item">
+                <label class="setting-label">
+                    <input type="checkbox" class="setting-checkbox" id="auto-fill-enabled" checked>
+                    <div class="setting-text">
+                        <div class="setting-title">启用自动填充</div>
+                        <div class="setting-description">在登录页面自动填充已保存的凭据</div>
+                    </div>
+                </label>
+            </div>
+
+            <div class="setting-item">
+                <label class="setting-label">
+                    <input type="checkbox" class="setting-checkbox" id="auto-save-enabled" checked>
+                    <div class="setting-text">
+                        <div class="setting-title">启用自动保存</div>
+                        <div class="setting-description">登录新网站时自动提示保存密码</div>
+                    </div>
+                </label>
+            </div>
+
+            <div class="setting-item">
+                <label class="setting-label">
+                    <input type="checkbox" class="setting-checkbox" id="notifications-enabled" checked>
+                    <div class="setting-text">
+                        <div class="setting-title">显示通知</div>
+                        <div class="setting-description">密码保存成功时显示桌面通知</div>
+                    </div>
+                </label>
+            </div>
+
+            <div class="setting-item">
+                <div class="setting-text">
+                    <div class="setting-title">⚠️ 危险操作</div>
+                    <div class="setting-description" style="margin-top: 10px;">
+                        <button class="btn btn-danger" id="clear-all-btn">清除所有密码</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="import-export-area">
+                <h3>ℹ️ 关于</h3>
+                <p><strong>密码管理器 Pro v1.0</strong></p>
+                <p style="margin-top: 8px;">
+                    • 本地加密存储密码<br>
+                    • 支持Chrome密码格式导入导出<br>
+                    • 自动填充和自动保存<br>
+                    • 无需联网，保护隐私
+                </p>
+            </div>
+        </div>
+
+        <!-- 调试部分 -->
+        <div class="section" id="debug-section">
+            <div class="import-export-area">
+                <h3>🔍 存储调试工具</h3>
+                <p>检查密码管理器的实际存储状态，诊断导入问题</p>
+
+                <div class="button-group">
+                    <button class="btn btn-primary" id="check-storage-btn">检查原始存储</button>
+                    <button class="btn btn-secondary" id="check-decrypt-btn">检查解密状态</button>
+                </div>
+
+                <div id="debug-result"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

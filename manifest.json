@@ -1,0 +1,44 @@
+{
+   "background":{
+      "page":"background.html",
+      "persistent": true
+   },
+   "browser_action":{
+      "default_icon":"icon_128.png",
+      "default_title":"Multi Login & Password Manager",
+      "default_popup":"popup.html"
+   },
+   "content_scripts":[
+      {
+         "all_frames":false,
+         "js":[
+            "content.js",
+            "autoSave.js"
+         ],
+         "matches":[
+            "http://*/*",
+            "https://*/*"
+         ],
+         "run_at":"document_end"
+      }
+   ],
+   "content_security_policy":"script-src 'self'  'unsafe-eval' ; object-src 'self'",
+   "description":"多账号登录隔离 + 专业密码管理器 - 支持Chrome风格自动填充、密码加密存储、CSV导入导出",
+   "icons":{
+      "128":"icon_128.png"
+   },
+   "manifest_version":2,
+   "name":"Multi Login & Password Manager Pro",
+   "permissions":[
+      "contextMenus",
+      "cookies",
+      "storage",
+      "tabs",
+      "http://*/*",
+      "https://*/*",
+      "webRequest",
+      "webRequestBlocking",
+      "webNavigation"
+   ],
+   "version":"2.0"
+}

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>环境颜色功能测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .color-preview {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .color-box {
+            padding: 20px;
+            border-radius: 4px;
+            text-align: center;
+            font-weight: bold;
+            min-width: 80px;
+        }
+        .info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .instructions {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #3367d6;
+        }
+        .demo {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <h2>🎨 环境颜色功能演示</h2>
+
+        <div class="info">
+            <strong>📋 功能说明：</strong><br>
+            每个环境（profile）现在都有自己独特的颜色标识！<br>
+            • Badge背景颜色：扩展图标上的数字徽章有不同颜色<br>
+            • 页面左侧指示条：显示当前环境的彩色条和标签<br>
+            • 20种不同颜色：为每个环境自动分配颜色
+        </div>
+
+        <div class="instructions">
+            <strong>🧪 测试步骤：</strong><br>
+            1. 在扩展图标上右键点击<br>
+            2. 选择"Duplicate Page in New Identity"创建新环境<br>
+            3. 观察不同环境有不同颜色的badge<br>
+            4. 打开新标签页，观察页面左侧的彩色条<br>
+            5. 创建多个环境，每个都有独特颜色
+        </div>
+
+        <h3>颜色预览（20种环境颜色）：</h3>
+        <div class="color-preview">
+            <div class="color-box" style="background: #FF6B6B; color: white;">环境1<br>红色</div>
+            <div class="color-box" style="background: #4ECDC4; color: white;">环境2<br>青色</div>
+            <div class="color-box" style="background: #45B7D1; color: white;">环境3<br>蓝色</div>
+            <div class="color-box" style="background: #96CEB4; color: white;">环境4<br>绿色</div>
+            <div class="color-box" style="background: #FFEAA7; color: black;">环境5<br>黄色</div>
+            <div class="color-box" style="background: #DDA0DD; color: white;">环境6<br>紫色</div>
+            <div class="color-box" style="background: #98D8C8; color: white;">环境7<br>薄荷绿</div>
+            <div class="color-box" style="background: #F7DC6F; color: black;">环境8<br>金色</div>
+            <div class="color-box" style="background: #BB8FCE; color: white;">环境9<br>淡紫色</div>
+            <div class="color-box" style="background: #85C1E9; color: white;">环境10<br>天蓝色</div>
+            <div class="color-box" style="background: #F8B88B; color: white;">环境11<br>桃色</div>
+            <div class="color-box" style="background: #52B788; color: white;">环境12<br>海绿色</div>
+            <div class="color-box" style="background: #FF8C94; color: white;">环境13<br>粉红色</div>
+            <div class="color-box" style="background: #AED6F1; color: white;">环境14<br>淡蓝色</div>
+            <div class="color-box" style="background: #FAD7A0; color: black;">环境15<br>杏色</div>
+            <div class="color-box" style="background: #D7BDE2; color: white;">环境16<br>淡紫色</div>
+            <div class="color-box" style="background: #A3E4D7; color: white;">环境17<br>淡青色</div>
+            <div class="color-box" style="background: #F5B7B1; color: white;">环境18<br>淡红色</div>
+            <div class="color-box" style="background: #85C1E9; color: white;">环境19<br>钢蓝色</div>
+            <div class="color-box" style="background: #F9E79F; color: black;">环境20<br>淡黄色</div>
+        </div>
+
+        <div class="demo">
+            <h3>🎯 实际效果演示：</h3>
+            <p><strong>Badge效果：</strong>扩展图标上显示带颜色的数字徽章</p>
+            <p><strong>页面指示条：</strong>页面左侧显示彩色竖条和"ENV X"标签</p>
+            <p><strong>颜色一致性：</strong>同一环境的所有标签页都有相同颜色</p>
+        </div>
+
+        <div class="info">
+            <strong>💡 使用技巧：</strong><br>
+            • 相同颜色的标签页属于同一个环境<br>
+            • 可以通过颜色快速识别和切换不同环境<br>
+            • 标签页左侧的彩色条不会影响页面正常使用<br>
+            • 页面标题中仍会显示 [环境ID] 便于识别
+        </div>
+
+        <div style="text-align: center; margin-top: 30px;">
+            <button onclick="window.location.reload()">刷新页面测试</button>
+            <button onclick="testCreateEnvironments()">创建测试环境</button>
+        </div>
+    </div>
+
+    <script>
+        function testCreateEnvironments() {
+            alert('请在扩展图标上右键点击，选择"Duplicate Page in New Identity"来创建新环境。\n\n每个新环境都会获得不同的颜色！');
+        }
+
+        // 检查当前页面是否在扩展环境中运行
+        if (typeof chrome !== 'undefined' && chrome.runtime) {
+            console.log('✅ 在Chrome扩展环境中运行');
+            console.log('可以通过扩展图标右键菜单创建新环境');
+        } else {
+            console.log('ℹ️ 不在扩展环境中，某些功能可能不可用');
+        }
+    </script>
+</body>
+</html>

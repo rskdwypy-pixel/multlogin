@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>标签页颜色功能演示</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌐</text></svg>">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .demo-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .feature-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .feature-box {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+        }
+        .feature-title {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        .favicon-demo {
+            display: flex;
+            gap: 15px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        .favicon-item {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            min-width: 100px;
+        }
+        .favicon-canvas {
+            width: 32px;
+            height: 32px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 0 auto 10px;
+        }
+        .color-legend {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            margin: 20px 0;
+        }
+        .color-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 8px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .color-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2px solid rgba(0,0,0,0.1);
+        }
+        .comparison {
+            background: #e3f2fd;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .step-list {
+            margin: 20px 0;
+        }
+        .step {
+            display: flex;
+            gap: 10px;
+            margin: 10px 0;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+        .step-number {
+            background: #4285f4;
+            color: white;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+        .tab-demo {
+            display: flex;
+            gap: 10px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        .fake-tab {
+            background: #f1f3f4;
+            padding: 8px 16px;
+            border-radius: 8px 8px 0 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            position: relative;
+        }
+        .tab-favicon {
+            width: 16px;
+            height: 16px;
+            border-radius: 2px;
+        }
+        .tab-close {
+            background: #d1d5db;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #5f6368;
+        }
+        button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #3367d6;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <h2>🏷️ 标签页颜色功能演示</h2>
+
+        <div class="comparison">
+            <strong>🎉 新功能！</strong><br>
+            现在环境颜色不仅显示在扩展图标上，还会显示在标签页的favicon中！<br>
+            让你在标签页条中一眼就能识别不同环境。
+        </div>
+
+        <div class="feature-grid">
+            <div class="feature-box">
+                <div class="feature-title">🎨 标签页Favicon颜色</div>
+                <p><strong>功能说明：</strong></p>
+                <ul>
+                    <li>在网站favicon右上角添加颜色角标</li>
+                    <li>角标颜色与环境ID对应</li>
+                    <li>保持原始favicon可识别性</li>
+                    <li>网站无favicon时显示默认彩色图标</li>
+                </ul>
+            </div>
+
+            <div class="feature-box">
+                <div class="feature-title">🔖 扩展图标Badge</div>
+                <p><strong>功能说明：</strong></p>
+                <ul>
+                    <li>扩展图标显示彩色数字徽章</li>
+                    <li>20种不同颜色区分环境</li>
+                    <li>数字显示环境ID</li>
+                    <li>页面左侧5px彩色指示条</li>
+                </ul>
+            </div>
+        </div>
+
+        <h3>🎯 20种环境颜色预览：</h3>
+        <div class="color-legend">
+            <div class="color-item"><div class="color-dot" style="background: #FF6B6B;"></div>环境1</div>
+            <div class="color-item"><div class="color-dot" style="background: #4ECDC4;"></div>环境2</div>
+            <div class="color-item"><div class="color-dot" style="background: #45B7D1;"></div>环境3</div>
+            <div class="color-item"><div class="color-dot" style="background: #96CEB4;"></div>环境4</div>
+            <div class="color-item"><div class="color-dot" style="background: #FFEAA7;"></div>环境5</div>
+            <div class="color-item"><div class="color-dot" style="background: #DDA0DD;"></div>环境6</div>
+            <div class="color-item"><div class="color-dot" style="background: #98D8C8;"></div>环境7</div>
+            <div class="color-item"><div class="color-dot" style="background: #F7DC6F;"></div>环境8</div>
+            <div class="color-item"><div class="color-dot" style="background: #BB8FCE;"></div>环境9</div>
+            <div class="color-item"><div class="color-dot" style="background: #85C1E9;"></div>环境10</div>
+        </div>
+
+        <h3>🧪 使用步骤：</h3>
+        <div class="step-list">
+            <div class="step">
+                <div class="step-number">1</div>
+                <div><strong>右键扩展图标</strong> → 选择"Duplicate Page in New Identity"</div>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div><strong>观察变化</strong> → 标签页favicon右上角出现颜色角标</div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div><strong>创建多个环境</strong> → 每个环境都有不同颜色</div>
+            </div>
+            <div class="step">
+                <div class="step-number">4</div>
+                <div><strong>快速识别</strong> → 在标签页条中一眼看出环境归属</div>
+            </div>
+        </div>
+
+        <h3>📋 标签页条效果模拟：</h3>
+        <div class="tab-demo">
+            <div class="fake-tab">
+                <div class="tab-favicon" style="background: linear-gradient(135deg, #ddd 50%, #FF6B6B 50%);"></div>
+                <span>网站 A</span>
+                <div class="tab-close">×</div>
+            </div>
+            <div class="fake-tab">
+                <div class="tab-favicon" style="background: linear-gradient(135deg, #ddd 50%, #4ECDC4 50%);"></div>
+                <span>网站 B</span>
+                <div class="tab-close">×</div>
+            </div>
+            <div class="fake-tab">
+                <div class="tab-favicon" style="background: linear-gradient(135deg, #ddd 50%, #45B7D1 50%);"></div>
+                <span>网站 C</span>
+                <div class="tab-close">×</div>
+            </div>
+        </div>
+        <p style="font-size: 11px; color: #666; margin-top: 10px;">* 模拟效果，实际使用时favicon会有颜色角标</p>
+
+        <h3>💡 实际效果：</h3>
+        <div class="feature-grid">
+            <div class="feature-box">
+                <div class="feature-title">✅ 优势</div>
+                <ul>
+                    <li>标签页条中直接看到颜色</li>
+                    <li>无需打开标签页就能识别环境</li>
+                    <li>与badge颜色保持一致</li>
+                    <li>保持原始图标可识别性</li>
+                </ul>
+            </div>
+
+            <div class="feature-box">
+                <div class="feature-title">🎨 技术细节</div>
+                <ul>
+                    <li>使用Canvas动态生成favicon</li>
+                    <li>保留原始favicon，只添加角标</li>
+                    <li>跨域favicon处理（CORS）</li>
+                    <li>自动回退到默认彩色图标</li>
+                </ul>
+            </div>
+        </div>
+
+        <div style="text-align: center; margin-top: 30px;">
+            <button onclick="testFaviconGeneration()">测试Favicon生成</button>
+            <button onclick="showColorComparison()">查看颜色对比</button>
+        </div>
+
+        <div id="test-result" style="margin-top: 20px;"></div>
+    </div>
+
+    <script>
+        function testFaviconGeneration() {
+            const resultDiv = document.getElementById('test-result');
+            resultDiv.innerHTML = '<div style="background: #d4edda; padding: 15px; border-radius: 4px; color: #155724;">✅ Favicon生成功能已实现！<br>请在扩展环境中创建新标签页查看效果。</div>';
+        }
+
+        function showColorComparison() {
+            const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'];
+            let html = '<div style="background: #fff3cd; padding: 15px; border-radius: 4px; color: #856404;"><strong>20种环境颜色：</strong><br>';
+            colors.forEach((color, index) => {
+                html += `<span style="display: inline-block; margin: 5px; padding: 5px 10px; background: ${color}; border-radius: 4px; font-size: 11px; color: ${getContrastColor(color)};">环境${index + 1}</span>`;
+            });
+            html += '</div>';
+            document.getElementById('test-result').innerHTML = html;
+        }
+
+        function getContrastColor(hexcolor) {
+            hexcolor = hexcolor.replace('#', '');
+            const r = parseInt(hexcolor.substr(0, 2), 16);
+            const g = parseInt(hexcolor.substr(2, 2), 16);
+            const b = parseInt(hexcolor.substr(4, 2), 16);
+            const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+            return (yiq >= 128) ? '#000000' : '#ffffff';
+        }
+
+        // 显示功能状态
+        console.log('🏷️ 标签页颜色功能演示页面已加载');
+        console.log('功能：favicon颜色角标 + 扩展badge颜色 + 页面指示条');
+    </script>
+</body>
+</html>

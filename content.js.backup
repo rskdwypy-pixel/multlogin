@@ -1,0 +1,436 @@
+var h = 6,
+    k, m = null,
+    n;
+try {
+    k = chrome.runtime.connect({
+        name: "3"
+    }), k.onMessage.addListener(function(a) {
+        4 == a.type && ("undefined" == a.profile && window.location.reload(), p(a.profile))
+    }), k.postMessage({
+        type: "3"
+    }), k.onDisconnect.addListener(function() {})
+} catch (q) {}
+if (!k) {
+    throw "port not found"
+}
+r();
+
+function s() {
+    var titleScript = `
+        (function() {
+            var ____t = document.title;
+            var ce = CustomEvent;
+            document.__defineSetter__("title", function(t) {
+                ____t = t;
+                var e = new ce("9", {
+                    "detail": t
+                });
+                document.dispatchEvent(e)
+            });
+            document.__defineGetter__("title", function() {
+                return ____t
+            });
+        })()`;
+    var b = document.createElement("script");
+    b.appendChild(document.createTextNode(titleScript));
+    (document.head || document.documentElement).appendChild(b);
+    b.parentNode.removeChild(b)
+}
+function r() {
+    var cookieScript = `
+        (function() {
+            var ce = CustomEvent;
+            document.__defineSetter__("cookie", function(c) {
+                var event = new ce("7", {
+                    "detail": c
+                });
+                document.dispatchEvent(event)
+            });
+            document.__defineGetter__("cookie", function() {
+                var event = new ce("8");
+                document.dispatchEvent(event);
+                var c;
+                try {
+                    c = localStorage.getItem("@@@cookies");
+                    localStorage.removeItem("@@@cookies")
+                } catch (e) {
+                    c = document.getElementById("@@@cookies").innerText
+                }
+                return c
+            })
+        })()`;
+    var b = document.createElement("script");
+    b.appendChild(document.createTextNode(cookieScript));
+    (document.head || document.documentElement).appendChild(b);
+    b.parentNode.removeChild(b)
+}
+function p(a) {
+    null !== a && (m = a, n = m.substr(0, m.indexOf("_@@@_")))
+}
+function t() {
+    if (null === m) {
+        // Send message to background script to handle cross-origin request
+        chrome.runtime.sendMessage({
+            type: "10"
+        }, function(response) {
+            if (chrome.runtime.lastError) {
+                // Ignore error - connection might not be ready yet
+                return;
+            }
+            if (response && response.profile) {
+                p(response.profile);
+            }
+        });
+    }
+}
+document.addEventListener(7, function(a) {
+    a = a.detail;
+    t();
+    document.cookie = null === m ? a : m + a.trim()
+});
+document.addEventListener(8, function() {
+    t();
+    var a;
+    var b = document.cookie;
+    a = "";
+    if (b) {
+        var b = b.split("; "),
+            f;
+        for (f in b) {
+            if (m) {
+                if (b[f].substring(0, m.length) != m) {
+                    continue
+                }
+            } else {
+                if (-1 < b[f].indexOf("_@@@_")) {
+                    continue
+                }
+            }
+            a && (a += "; ");
+            a += m ? b[f].substring(m.length) : b[f]
+        }
+    }
+    try {
+        localStorage.setItem("@@@cookies", a)
+    } catch (v) {
+        document.getElementById("@@@cookies") || (f = document.createElement("div"), f.setAttribute("id", "@@@cookies"), document.documentElement.appendChild(f), f.style.display = "none"), document.getElementById("@@@cookies").a = a
+    }
+});
+document.addEventListener(9, function(a) {
+    u(a.detail)
+});
+
+function u(a) {
+    n ? a.substr(0, n.length + 2) != "[" + n + "]" && (document.title = "[" + n + "] " + a + " [" + n + "]") : document.title = a
+}
+chrome.runtime.onMessage.addListener(function(a) {
+    5 == a.type && (s(), u(document.title));
+    "3" == a.type && (p(""), document.title = document.title.replace(/\s*\[\d*\]\s*/g, ""))
+});
+window.onunload = function() {
+    document.title = document.title.replace(/\s*\[\d*\]\s*/g, "")
+};
+
+// Password Manager Auto-fill Functionality
+(function() {
+    'use strict';
+
+    // Wait for DOM to be ready
+    function initPasswordManager() {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', setupPasswordManager);
+        } else {
+            setupPasswordManager();
+        }
+    }
+
+    function setupPasswordManager() {
+        // Check if auto-fill is enabled
+        chrome.storage.local.get(['autoFillEnabled'], function(result) {
+            if (result.autoFillEnabled !== false) {
+                detectLoginForm();
+            }
+        });
+
+        // Also check for auto-save
+        chrome.storage.local.get(['autoSaveEnabled'], function(result) {
+            if (result.autoSaveEnabled !== false) {
+                setupPasswordCapture();
+            }
+        });
+    }
+
+    // Detect login form
+    function detectLoginForm() {
+        // Look for password inputs
+        const passwordInputs = document.querySelectorAll('input[type="password"]');
+        if (passwordInputs.length === 0) return;
+
+        // Find corresponding username input (usually before password field)
+        passwordInputs.forEach(function(passwordInput) {
+            const form = passwordInput.closest('form');
+            let usernameInput = null;
+
+            if (form) {
+                // Try to find username/email input in the same form
+                const inputs = form.querySelectorAll('input[type="text"], input[type="email"], input[name="user"], input[name="email"], input[name="login"]');
+                if (inputs.length > 0) {
+                    usernameInput = inputs[0];
+                }
+            } else {
+                // If no form, look for input before password field
+                let prev = passwordInput.previousElementSibling;
+                while (prev) {
+                    if (prev.tagName === 'INPUT' &&
+                        (prev.type === 'text' || prev.type === 'email' ||
+                         prev.name === 'user' || prev.name === 'email' || prev.name === 'login')) {
+                        usernameInput = prev;
+                        break;
+                    }
+                    prev = prev.previousElementSibling;
+                }
+            }
+
+            if (usernameInput) {
+                setupAutoFill(usernameInput, passwordInput);
+            }
+        });
+    }
+
+    // Setup auto-fill for specific inputs
+    function setupAutoFill(usernameInput, passwordInput) {
+        // Get current URL
+        const currentUrl = window.location.href;
+
+        // Request matching passwords from background
+        chrome.runtime.sendMessage({
+            action: 'passwordManager_find',
+            url: currentUrl
+        }, function(response) {
+            if (response && response.passwords && response.passwords.length > 0) {
+                showPasswordDropdown(usernameInput, passwordInput, response.passwords);
+            }
+        });
+
+        // Also listen for focus events to show dropdown again
+        usernameInput.addEventListener('focus', function() {
+            chrome.runtime.sendMessage({
+                action: 'passwordManager_find',
+                url: currentUrl
+            }, function(response) {
+                if (response && response.passwords && response.passwords.length > 0) {
+                    showPasswordDropdown(usernameInput, passwordInput, response.passwords);
+                }
+            });
+        });
+    }
+
+    // Show password selection dropdown
+    function showPasswordDropdown(usernameInput, passwordInput, passwords) {
+        // Remove existing dropdown if any
+        const existingDropdown = document.getElementById('pm-dropdown');
+        if (existingDropdown) existingDropdown.remove();
+
+        // Create dropdown
+        const dropdown = document.createElement('div');
+        dropdown.id = 'pm-dropdown';
+        dropdown.style.cssText = `
+            position: absolute;
+            background: white;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            z-index: 10000;
+            max-height: 200px;
+            overflow-y: auto;
+            width: ${usernameInput.offsetWidth}px;
+        `;
+
+        passwords.forEach(function(pwd) {
+            const item = document.createElement('div');
+            item.style.cssText = `
+                padding: 10px;
+                cursor: pointer;
+                border-bottom: 1px solid #eee;
+                font-size: 13px;
+            `;
+            item.textContent = `${pwd.username}`;
+
+            item.addEventListener('mouseenter', function() {
+                this.style.background = '#f0f0f0';
+            });
+            item.addEventListener('mouseleave', function() {
+                this.style.background = 'white';
+            });
+
+            item.addEventListener('click', function() {
+                // Fill in username and password
+                usernameInput.value = pwd.username;
+                passwordInput.value = pwd.password;
+
+                // Trigger change events
+                usernameInput.dispatchEvent(new Event('input', {bubbles: true}));
+                usernameInput.dispatchEvent(new Event('change', {bubbles: true}));
+                passwordInput.dispatchEvent(new Event('input', {bubbles: true}));
+                passwordInput.dispatchEvent(new Event('change', {bubbles: true}));
+
+                // Remove dropdown
+                dropdown.remove();
+            });
+
+            dropdown.appendChild(item);
+        });
+
+        // Position dropdown
+        const rect = usernameInput.getBoundingClientRect();
+        dropdown.style.top = (rect.bottom + window.scrollY + 2) + 'px';
+        dropdown.style.left = rect.left + 'px';
+
+        document.body.appendChild(dropdown);
+
+        // Hide dropdown when clicking outside
+        setTimeout(function() {
+            document.addEventListener('click', function hideDropdown(e) {
+                if (!dropdown.contains(e.target) && e.target !== usernameInput) {
+                    dropdown.remove();
+                    document.removeEventListener('click', hideDropdown);
+                }
+            });
+        }, 100);
+    }
+
+    // Setup password capture (auto-save)
+    function setupPasswordCapture() {
+        // Wait for forms to appear
+        const observer = new MutationObserver(function(mutations) {
+            mutations.forEach(function(mutation) {
+                mutation.addedNodes.forEach(function(node) {
+                    if (node.nodeType === 1) {
+                        const forms = node.tagName === 'FORM' ? [node] : node.querySelectorAll ? node.querySelectorAll('form') : [];
+                        forms.forEach(function(form) {
+                            setupFormCapture(form);
+                        });
+                    }
+                });
+            });
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+
+        // Also check existing forms
+        document.querySelectorAll('form').forEach(setupFormCapture);
+    }
+
+    // Setup form capture for specific form
+    function setupFormCapture(form) {
+        // Check if form has password input
+        const passwordInput = form.querySelector('input[type="password"]');
+        if (!passwordInput) return;
+
+        // Find username input
+        let usernameInput = null;
+        const inputs = form.querySelectorAll('input[type="text"], input[type="email"], input[name="user"], input[name="email"], input[name="login"]');
+        if (inputs.length > 0) {
+            usernameInput = inputs[0];
+        }
+
+        if (!usernameInput) return;
+
+        // Listen for form submission
+        form.addEventListener('submit', function(e) {
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+
+            if (!username || !password) return;
+
+            // Show save prompt
+            showSavePrompt(username, password);
+        });
+    }
+
+    // Show save password prompt
+    function showSavePrompt(username, password) {
+        // Remove existing prompt if any
+        const existingPrompt = document.getElementById('pm-save-prompt');
+        if (existingPrompt) existingPrompt.remove();
+
+        // Create prompt
+        const prompt = document.createElement('div');
+        prompt.id = 'pm-save-prompt';
+        prompt.style.cssText = `
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: white;
+            border: 1px solid #4285f4;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            z-index: 10001;
+            max-width: 300px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        `;
+
+        prompt.innerHTML = `
+            <div style="font-weight: 500; margin-bottom: 10px; color: #333;">保存密码?</div>
+            <div style="font-size: 13px; color: #666; margin-bottom: 15px;">
+                是否保存 ${username} 的密码？
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button id="pm-save-btn" style="flex: 1; padding: 8px; background: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer;">保存</button>
+                <button id="pm-never-btn" style="flex: 1; padding: 8px; background: #f1f1f1; color: #666; border: none; border-radius: 4px; cursor: pointer;">永不</button>
+                <button id="pm-close-btn" style="flex: 1; padding: 8px; background: #f1f1f1; color: #666; border: none; border-radius: 4px; cursor: pointer;">关闭</button>
+            </div>
+        `;
+
+        document.body.appendChild(prompt);
+
+        // Add event listeners
+        prompt.querySelector('#pm-save-btn').addEventListener('click', function() {
+            savePassword(username, password);
+            prompt.remove();
+        });
+
+        prompt.querySelector('#pm-never-btn').addEventListener('click', function() {
+            // Save to blacklist (not implemented yet)
+            prompt.remove();
+        });
+
+        prompt.querySelector('#pm-close-btn').addEventListener('click', function() {
+            prompt.remove();
+        });
+
+        // Auto-hide after 30 seconds
+        setTimeout(function() {
+            if (prompt.parentNode) {
+                prompt.remove();
+            }
+        }, 30000);
+    }
+
+    // Save password
+    function savePassword(username, password) {
+        const url = window.location.href;
+        const domain = window.location.hostname;
+
+        chrome.runtime.sendMessage({
+            action: 'passwordManager_save',
+            password: {
+                name: domain,
+                url: url,
+                username: username,
+                password: password
+            }
+        }, function(response) {
+            if (response && response.success) {
+                console.log('Password saved successfully');
+            }
+        });
+    }
+
+    // Initialize
+    initPasswordManager();
+})();

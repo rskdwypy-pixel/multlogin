@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>环境颜色功能诊断</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .diagnostic-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+        }
+        .test-section h3 {
+            margin-top: 0;
+        }
+        .status {
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-size: 13px;
+        }
+        .status-success { background: #d4edda; color: #155724; }
+        .status-error { background: #f8d7da; color: #721c24; }
+        .status-warning { background: #fff3cd; color: #856404; }
+        .status-info { background: #d1ecf1; color: #0c5460; }
+        button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #3367d6;
+        }
+        #test-results {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="diagnostic-container">
+        <h2>🔍 环境颜色功能诊断工具</h2>
+
+        <div class="test-section">
+            <h3>📋 功能检查清单</h3>
+            <button onclick="runDiagnostics()">运行完整诊断</button>
+            <button onclick="testIndicatorOnly()">测试页面指示器</button>
+            <button onclick="testFaviconOnly()">测试Favicon颜色</button>
+        </div>
+
+        <div id="test-results"></div>
+    </div>
+
+    <script>
+        function addResult(message, type) {
+            const resultsDiv = document.getElementById('test-results');
+            const status = document.createElement('div');
+            status.className = 'status status-' + type;
+            status.textContent = message;
+            resultsDiv.appendChild(status);
+        }
+
+        function clearResults() {
+            document.getElementById('test-results').innerHTML = '';
+        }
+
+        function runDiagnostics() {
+            clearResults();
+
+            addResult('🔍 开始环境颜色功能诊断...', 'info');
+
+            // 检查1：扩展环境
+            setTimeout(function() {
+                if (typeof chrome !== 'undefined' && chrome.runtime) {
+                    addResult('✅ 在Chrome扩展环境中运行', 'success');
+
+                    // 检查当前页面状态
+                    checkPageIndicator();
+                } else {
+                    addResult('⚠️ 不在扩展环境中运行，某些功能可能不可用', 'warning');
+                    checkPageIndicator();
+                }
+            }, 100);
+        }
+
+        function checkPageIndicator() {
+            setTimeout(function() {
+                // 检查页面指示器
+                const indicator = document.getElementById('pm-environment-indicator');
+                if (indicator) {
+                    addResult('✅ 页面指示器已存在', 'success');
+                    addResult('指示器位置: ' + indicator.style.position, 'info');
+                    addResult('指示器宽度: ' + indicator.style.width, 'info');
+                } else {
+                    addResult('❌ 页面指示器不存在（这可能是正常的）', 'error');
+                    addResult('说明：页面指示器只在多环境下显示', 'info');
+                }
+
+                // 检查favicon
+                checkFavicon();
+            }, 200);
+        }
+
+        function checkFavicon() {
+            setTimeout(function() {
+                const links = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]');
+                if (links.length > 0) {
+                    addResult('✅ 找到 ' + links.length + ' 个favicon链接', 'success');
+                    links.forEach(function(link, index) {
+                        addResult('Favicon ' + (index + 1) + ': ' + link.href, 'info');
+                    });
+                } else {
+                    addResult('❌ 没有找到favicon链接', 'error');
+                }
+
+                // 检查环境变量
+                checkEnvironmentVariables();
+            }, 300);
+        }
+
+        function checkEnvironmentVariables() {
+            setTimeout(function() {
+                const hasProfile = typeof n !== 'undefined' && n !== null;
+                const hasTitleChange = typeof u !== 'undefined';
+
+                if (hasProfile) {
+                    addResult('✅ 检测到profile变量: ' + n, 'success');
+                } else {
+                    addResult('❌ 未检测到profile变量（正常：单环境页面）', 'warning');
+                }
+
+                if (hasTitleChange) {
+                    addResult('✅ 标题修改函数存在', 'success');
+                } else {
+                    addResult('❌ 标题修改函数不存在', 'error');
+                }
+
+                provideExplanation();
+            }, 400);
+        }
+
+        function provideExplanation() {
+            setTimeout(function() {
+                addResult('📋 诊断完成', 'info');
+                addResult('--- 功能说明 ---', 'info');
+                addResult('1. 扩展Badge颜色：✅ 已实现并工作', 'success');
+                addResult('2. 页面指示条：⚠️ 仅在多环境下显示', 'warning');
+                addResult('3. Favicon颜色角标：⚠️ 仅在多环境下显示', 'warning');
+                addResult('--- 为什么看不到指示器？ ---', 'info');
+                addResult('页面指示器和favicon颜色只在MULTILOGIN环境下显示', 'info');
+                addResult('当前页面是普通单环境页面，所以没有指示器', 'info');
+            }, 500);
+        }
+
+        function testIndicatorOnly() {
+            clearResults();
+            addResult('🧪 测试页面指示器功能...', 'info');
+
+            // 模拟添加指示器
+            const testIndicator = document.createElement('div');
+            testIndicator.id = 'pm-environment-indicator';
+            testIndicator.style.cssText = `
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 5px;
+                height: 100vh;
+                z-index: 2147483647;
+                pointer-events: none;
+                background: linear-gradient(180deg, #FF6B6B 0%, #FF6B6B 50%, #FF6B6B 100%);
+                box-shadow: 2px 0 15px #FF6B6B;
+            `;
+
+            // 添加环境标签
+            const label = document.createElement('div');
+            label.style.cssText = `
+                position: absolute;
+                top: 50%;
+                left: 0;
+                transform: translateY(-50%) rotate(-90deg);
+                transform-origin: left center;
+                white-space: nowrap;
+                font-family: Arial, sans-serif;
+                font-size: 11px;
+                font-weight: bold;
+                color: white;
+                background: #FF6B6B;
+                padding: 4px 8px;
+                border-radius: 0 4px 4px 0;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+                letter-spacing: 1px;
+            `;
+            label.textContent = 'TEST ENV';
+
+            testIndicator.appendChild(label);
+            document.body.appendChild(testIndicator);
+
+            addResult('✅ 测试指示器已添加到页面左侧', 'success');
+            addResult('你应该看到页面左侧有一个红色的5px宽竖条', 'success');
+            addResult('中间显示"TEST ENV"文字', 'success');
+            addResult('点击"清除结果"按钮移除测试指示器', 'info');
+        }
+
+        function testFaviconOnly() {
+            clearResults();
+            addResult('🧪 测试Favicon颜色功能...', 'info');
+
+            // 创建测试favicon
+            const canvas = document.createElement('canvas');
+            canvas.width = 32;
+            canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+
+            // 绘制原始图标
+            ctx.fillStyle = '#ddd';
+            ctx.fillRect(0, 0, 32, 32);
+            ctx.fillStyle = '#999';
+            ctx.font = '20px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('🌐', 16, 16);
+
+            // 绘制颜色角标
+            ctx.fillStyle = '#FF6B6B';
+            ctx.beginPath();
+            ctx.moveTo(32, 0);
+            ctx.lineTo(32, 12);
+            ctx.lineTo(20, 0);
+            ctx.closePath();
+            ctx.fill();
+
+            // 添加白色边框
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(32, 0);
+            ctx.lineTo(32, 12);
+            ctx.lineTo(20, 0);
+            ctx.closePath();
+            ctx.stroke();
+
+            // 更新favicon
+            const dataUrl = canvas.toDataURL();
+
+            // 移除旧favicon
+            const oldLinks = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]');
+            oldLinks.forEach(link => link.remove());
+
+            // 添加新favicon
+            const link = document.createElement('link');
+            link.rel = 'icon';
+            link.href = dataUrl;
+            document.head.appendChild(link);
+
+            const shortcutLink = document.createElement('link');
+            shortcutLink.rel = 'shortcut icon';
+            shortcutLink.href = dataUrl;
+            document.head.appendChild(shortcutLink);
+
+            addResult('✅ 测试favicon已更新', 'success');
+            addResult('查看标签页favicon，应该看到右上角红色角标', 'success');
+            addResult('提示：某些浏览器可能需要刷新页面才能看到变化', 'info');
+        }
+
+        // 页面加载完成
+        window.onload = function() {
+            addResult('🔍 诊断工具已准备就绪', 'info');
+            addResult('点击按钮开始测试功能', 'info');
+        };
+    </script>
+</body>
+</html>

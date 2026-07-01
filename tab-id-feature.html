@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>标签页ID功能演示</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 900px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .demo-container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .feature-explanation {
+            background: #e3f2fd;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .example-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .tab-example {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .tab-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        .tab-visual {
+            background: #e9ecef;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin: 5px 0;
+        }
+        .env-badge {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-right: 5px;
+        }
+        .env-badge.red { background: #FF6B6B; color: white; }
+        .env-badge.cyan { background: #4ECDC4; color: white; }
+        .env-badge.blue { background: #45B7D1; color: white; }
+        .env-badge.green { background: #96CEB4; color: white; }
+        .id-conversion {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .conversion-example {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+        .arrow {
+            font-size: 20px;
+            color: #666;
+        }
+        .original-id {
+            background: #f8d7da;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+        .converted-id {
+            background: #d4edda;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-weight: bold;
+        }
+        .benefits {
+            background: #d1ecf1;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .benefits ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .benefits li {
+            margin: 5px 0;
+        }
+        button {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        button:hover {
+            background: #3367d6;
+        }
+        .visual-demo {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .demo-tabs {
+            display: flex;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .demo-tab {
+            background: #e9ecef;
+            padding: 10px 15px;
+            border-radius: 8px 8px 0 0;
+            font-size: 12px;
+            min-width: 150px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="demo-container">
+        <h2>🏷️ 标签页环境ID显示功能</h2>
+
+        <div class="feature-explanation">
+            <strong>🎯 新功能！</strong><br>
+            现在每个标签页标题前都会显示3位环境ID：<br>
+            格式：[001] 页面原始标题<br>
+            即使不看颜色，也能通过数字快速识别同一环境的标签页！
+        </div>
+
+        <div class="id-conversion">
+            <h3>🔢 ID转换逻辑</h3>
+            <p><strong>9位Profile ID → 3位环境ID</strong></p>
+
+            <div class="conversion-example">
+                <span class="original-id">123456789</span>
+                <span class="arrow">→</span>
+                <span class="converted-id">[789]</span>
+                <span style="margin-left: 20px; color: #666;">(取最后3位)</span>
+            </div>
+
+            <div class="conversion-example">
+                <span class="original-id">1_@@@_</span>
+                <span class="arrow">→</span>
+                <span class="converted-id">[001]</span>
+                <span style="margin-left: 20px; color: #666;">(补0到3位)</span>
+            </div>
+
+            <div class="conversion-example">
+                <span class="original-id">45_@@@_</span>
+                <span class="arrow">→</span>
+                <span class="converted-id">[045]</span>
+                <span style="margin-left: 20px; color: #666;">(正常使用)</span>
+            </div>
+
+            <div class="conversion-example">
+                <span class="original-id">9999_@@@_</span>
+                <span class="arrow">→</span>
+                <span class="converted-id">[999]</span>
+                <span style="margin-left: 20px; color: #666;">(超过999显示999)</span>
+            </div>
+        </div>
+
+        <h3>📋 实际效果示例</h3>
+        <div class="example-grid">
+            <div class="tab-example">
+                <div class="tab-title">环境1</div>
+                <div class="tab-visual">
+                    <span class="env-badge red">[001]</span> 网站A<br>
+                    <span style="color: #999; font-size: 11px;">红色Badge</span>
+                </div>
+            </div>
+
+            <div class="tab-example">
+                <div class="tab-title">环境2</div>
+                <div class="tab-visual">
+                    <span class="env-badge cyan">[002]</span> 网站B<br>
+                    <span style="color: #999; font-size: 11px;">青色Badge</span>
+                </div>
+            </div>
+
+            <div class="tab-example">
+                <div class="tab-title">环境3</div>
+                <div class="tab-visual">
+                    <span class="env-badge blue">[003]</span> 网站C<br>
+                    <span style="color: #999; font-size: 11px;">蓝色Badge</span>
+                </div>
+            </div>
+        </div>
+
+        <h3>🎨 完整的视觉识别系统</h3>
+        <div class="visual-demo">
+            <strong>现在每个环境标签页都有三种识别方式：</strong>
+            <div class="demo-tabs">
+                <div class="demo-tab">
+                    <div>🔖 扩展图标</div>
+                    <div style="font-size: 11px; margin-top: 5px; color: #666;">显示1、2、3...</div>
+                </div>
+                <div class="demo-tab">
+                    <div>🏷️ 标签页标题</div>
+                    <div style="font-size: 11px; margin-top: 5px; color: #666;">显示[001]、[002]...</div>
+                </div>
+                <div class="demo-tab">
+                    <div>🎨 颜色标识</div>
+                    <div style="font-size: 11px; margin-top: 5px; color: #666;">Badge、页面条、Favicon</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="benefits">
+            <h3>💡 使用优势</h3>
+            <ul>
+                <li><strong>快速识别</strong>：数字ID比颜色更容易记忆和比较</li>
+                <li><strong>精确区分</strong>：001、002、003比颜色更准确</li>
+                <li><strong>双重保障</strong>：数字 + 颜色，两种识别方式</li>
+                <li><strong>简化显示</strong>：3位数字比9位数字更简洁</li>
+                <li><strong>范围充足</strong>：999个环境足够正常使用</li>
+            </ul>
+        </div>
+
+        <h3>🧪 测试方法</h3>
+        <ol style="line-height: 1.8;">
+            <li><strong>重新加载扩展</strong>：chrome://extensions/ → 重新加载</li>
+            <li><strong>创建新环境</strong>：右键扩展图标 → "Duplicate Page in New Identity"</li>
+            <li><strong>观察效果</strong>：
+                <ul>
+                    <li>标签页标题显示 [001]、[002]、[003]...</li>
+                    <li>扩展图标badge显示对应颜色</li>
+                    <li>页面左侧显示彩色指示条（多环境页面）</li>
+                </ul>
+            </li>
+            <li><strong>创建多个环境</strong>：验证数字递增和颜色不同</li>
+        </ol>
+
+        <div style="text-align: center; margin-top: 30px;">
+            <button onclick="testTitleFormat()">测试标题格式</button>
+            <button onclick="showIdExamples()">查看ID示例</button>
+        </div>
+
+        <div id="test-result" style="margin-top: 20px;"></div>
+    </div>
+
+    <script>
+        function testTitleFormat() {
+            const originalTitle = "测试网页 - 示例标题";
+            const envIds = ['001', '002', '003', '004', '005'];
+
+            let html = '<div style="background: #d4edda; padding: 15px; border-radius: 4px; color: #155724;"><strong>标题格式示例：</strong><br>';
+
+            envIds.forEach(id => {
+                html += `<div style="margin: 5px 0; padding: 8px; background: white; border-radius: 4px;">[${id}] ${originalTitle}</div>`;
+            });
+
+            html += '</div>';
+            document.getElementById('test-result').innerHTML = html;
+        }
+
+        function showIdExamples() {
+            const examples = [
+                { original: '1_@@@_', converted: '001', desc: '环境1，补0到3位' },
+                { original: '42_@@@_', converted: '042', desc: '环境42，显示042' },
+                { original: '999_@@@_', converted: '999', desc: '环境999，最大值' },
+                { original: '1000_@@@_', converted: '999', desc: '环境1000，超出范围显示999' }
+            ];
+
+            let html = '<div style="background: #fff3cd; padding: 15px; border-radius: 4px; color: #856404;"><strong>ID转换示例：</strong><br>';
+
+            examples.forEach(ex => {
+                html += `<div style="margin: 5px 0; padding: 8px; background: white; border-radius: 4px;">
+                    ${ex.original} → [${ex.converted}] - ${ex.desc}
+                </div>`;
+            });
+
+            html += '</div>';
+            document.getElementById('test-result').innerHTML = html;
+        }
+
+        // 页面加载完成
+        window.onload = function() {
+            console.log('🏷️ 标签页ID功能演示页面已加载');
+            console.log('新功能：标题前显示 [001]、[002]、[003] 格式');
+            console.log('转换逻辑：9位Profile ID → 3位环境ID');
+        };
+    </script>
+</body>
+</html>

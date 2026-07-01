@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>CSV诊断工具</title>
+    <style>
+        body {
+            font-family: monospace;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #333;
+        }
+        .section {
+            margin: 20px 0;
+        }
+        .btn {
+            background: #4285f4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn:hover {
+            background: #3367d6;
+        }
+        .file-input {
+            margin: 10px 0;
+        }
+        .results {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .result-item {
+            padding: 8px;
+            margin: 4px 0;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .warning { background: #fff3cd; color: #856404; }
+        .info { background: #d1ecf1; color: #0c5460; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .stat-box {
+            background: #e8f0fe;
+            padding: 15px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #1a73e8;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #5f6368;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>🔍 CSV密码文件诊断工具</h2>
+
+        <div class="section">
+            <p>这个工具可以帮你诊断CSV密码文件的问题，检查编码、格式和字段完整性。</p>
+
+            <input type="file" id="csvFile" accept=".csv" class="file-input">
+            <br>
+            <button onclick="diagnoseCSV()" class="btn">开始诊断</button>
+        </div>
+
+        <div id="stats" class="stats" style="display: none;">
+            <div class="stat-box">
+                <div class="stat-number" id="totalLines">0</div>
+                <div class="stat-label">总行数</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="validLines">0</div>
+                <div class="stat-label">有效行</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="invalidLines">0</div>
+                <div class="stat-label">无效行</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-number" id="emptyLines">0</div>
+                <div class="stat-label">空行</div>
+            </div>
+        </div>
+
+        <div id="results" class="results" style="display: none;"></div>
+    </div>
+
+    <script>
+        function addResult(message, type) {
+            const resultsDiv = document.getElementById('results');
+            const item = document.createElement('div');
+            item.className = 'result-item ' + type;
+            item.textContent = message;
+            resultsDiv.appendChild(item);
+        }
+
+        function updateStats(total, valid, invalid, empty) {
+            document.getElementById('totalLines').textContent = total;
+            document.getElementById('validLines').textContent = valid;
+            document.getElementById('invalidLines').textContent = invalid;
+            document.getElementById('emptyLines').textContent = empty;
+            document.getElementById('stats').style.display = 'grid';
+        }
+
+        function parseCSVLine(line) {
+            const result = [];
+            let current = '';
+            let inQuotes = false;
+
+            for (let i = 0; i < line.length; i++) {
+                const char = line[i];
+
+                if (char === '"') {
+                    if (inQuotes && line[i + 1] === '"') {
+                        current += '"';
+                        i++;
+                    } else {
+                        inQuotes = !inQuotes;
+                    }
+                } else if (char === ',' && !inQuotes) {
+                    result.push(current);
+                    current = '';
+                } else {
+                    current += char;
+                }
+            }
+
+            result.push(current);
+            return result.map(function(field) {
+                return field.trim();
+            });
+        }
+
+        function extractDomain(url) {
+            try {
+                const urlObj = new URL(url);
+                return urlObj.hostname;
+            } catch (e) {
+                return url;
+            }
+        }
+
+        function diagnoseCSV() {
+            const fileInput = document.getElementById('csvFile');
+            const file = fileInput.files[0];
+
+            if (!file) {
+                alert('请先选择CSV文件');
+                return;
+            }
+
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+            resultsDiv.style.display = 'block';
+
+            addResult('开始诊断CSV文件: ' + file.name, 'info');
+            addResult('文件大小: ' + (file.size / 1024).toFixed(2) + ' KB', 'info');
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const csvText = e.target.result;
+                addResult('文件编码检测: UTF-8', 'info');
+
+                let processedCsv = csvText;
+                if (csvText.charCodeAt(0) === 0xFEFF) {
+                    processedCsv = csvText.substring(1);
+                    addResult('检测到UTF-8 BOM，已移除', 'warning');
+                }
+
+                const lines = processedCsv.split('\n');
+                addResult('总行数: ' + lines.length, 'info');
+
+                let startIndex = 0;
+                if (lines.length > 0) {
+                    const firstLine = lines[0].toLowerCase().trim();
+                    if (firstLine.startsWith('name') || firstLine.includes('url')) {
+                        startIndex = 1;
+                        addResult('检测到标题行: ' + lines[0].substring(0, 50), 'info');
+                    }
+                }
+
+                let validCount = 0;
+                let invalidCount = 0;
+                let emptyCount = 0;
+
+                for (let i = startIndex; i < lines.length; i++) {
+                    const line = lines[i].trim();
+
+                    if (!line) {
+                        emptyCount++;
+                        continue;
+                    }
+
+                    const matches = parseCSVLine(line);
+
+                    if (matches && matches.length >= 4) {
+                        const name = matches[0] || '';
+                        const url = matches[1] || '';
+                        const username = matches[2] || '';
+                        const password = matches[3] || '';
+
+                        const hasUrl = url && url.length > 0 && url.trim().length > 0;
+                        const hasUsername = username && username.length > 0 && username.trim().length > 0;
+                        const hasPassword = password && password.length > 0 && password.trim().length > 0;
+
+                        if (hasUrl && hasUsername && hasPassword) {
+                            validCount++;
+                            if (validCount <= 10) {
+                                addResult('✅ 有效: ' + extractDomain(url) + ' - ' + username, 'success');
+                            }
+                        } else {
+                            invalidCount++;
+                            addResult('❌ 无效: URL=' + (hasUrl ? '有' : '无') + ', Username=' + (hasUsername ? '有' : '无') + ', Password=' + (hasPassword ? '有(' + password.length + '字符)' : '无'), 'error');
+                        }
+                    } else {
+                        invalidCount++;
+                        addResult('❌ 解析失败: 字段数=' + (matches ? matches.length : 0), 'error');
+                    }
+                }
+
+                updateStats(lines.length, validCount, invalidCount, emptyCount);
+
+                addResult('诊断完成！', 'info');
+                addResult('有效密码: ' + validCount + '，可以导入', 'success');
+                addResult('无效记录: ' + invalidCount + '，将被跳过', 'warning');
+            };
+
+            reader.readAsText(file, 'UTF-8');
+        }
+    </script>
+</body>
+</html>
