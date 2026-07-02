@@ -8,22 +8,154 @@ var environmentLabelState = {
     rawTitle: "",
     applyingTitle: false,
     titleObserver: null,
+    accountObserver: null,
     faviconObserver: null,
     refreshTimer: null,
     heartbeatTimer: null,
+    lastAccountTitle: "",
     lastFaviconKey: null
 };
+var extensionContextInvalidated = false;
+var DEBUG_LOGS = false;
+
+function debugLog() {
+    if (DEBUG_LOGS) {
+        console.log.apply(console, arguments);
+    }
+}
+
+function debugWarn() {
+    if (DEBUG_LOGS) {
+        console.warn.apply(console, arguments);
+    }
+}
+
+function debugError() {
+    if (DEBUG_LOGS) {
+        console.error.apply(console, arguments);
+    }
+}
+
+function isContextInvalidationError(error) {
+    var message = error && (error.message || String(error));
+    return /extension context invalidated|context invalidated|invalidated/i.test(message || "");
+}
+
+function markExtensionContextInvalidated(error) {
+    if (extensionContextInvalidated) {
+        return;
+    }
+    extensionContextInvalidated = true;
+    cleanupExtensionUi();
+    disconnectProfilePort();
+    cleanupEnvironmentLabeling();
+    if (error) {
+        debugLog('扩展上下文已失效，已停止内容脚本的扩展通信:', error.message || error);
+    }
+}
+
+function isExtensionContextReady() {
+    if (extensionContextInvalidated) {
+        return false;
+    }
+    try {
+        return typeof chrome !== "undefined" &&
+            chrome.runtime &&
+            !!chrome.runtime.id;
+    } catch (e) {
+        if (isContextInvalidationError(e)) {
+            markExtensionContextInvalidated(e);
+        }
+        return false;
+    }
+}
+
+function getRuntimeError() {
+    try {
+        return chrome.runtime.lastError || null;
+    } catch (e) {
+        return e;
+    }
+}
+
+function consumeRuntimeError(logPrefix) {
+    const runtimeError = getRuntimeError();
+    if (runtimeError && logPrefix) {
+        debugLog(logPrefix + ':', runtimeError.message || runtimeError);
+    }
+    if (runtimeError && isContextInvalidationError(runtimeError)) {
+        markExtensionContextInvalidated(runtimeError);
+    }
+    return runtimeError;
+}
+
+function safeRuntimeSendMessage(message, callback) {
+    if (!isExtensionContextReady()) {
+        if (callback) callback(null, new Error("Extension context invalidated"));
+        return false;
+    }
+
+    try {
+        chrome.runtime.sendMessage(message, function(response) {
+            const runtimeError = getRuntimeError();
+            if (runtimeError) {
+                if (isContextInvalidationError(runtimeError)) {
+                    markExtensionContextInvalidated(runtimeError);
+                }
+                if (callback) callback(null, runtimeError);
+                return;
+            }
+            if (callback) callback(response, null);
+        });
+        return true;
+    } catch (e) {
+        if (isContextInvalidationError(e)) {
+            markExtensionContextInvalidated(e);
+        }
+        if (callback) callback(null, e);
+        return false;
+    }
+}
+
+function safeStorageLocalGet(keys, callback) {
+    if (!isExtensionContextReady() || !chrome.storage || !chrome.storage.local) {
+        if (callback) callback({}, new Error("Extension context invalidated"));
+        return false;
+    }
+
+    try {
+        chrome.storage.local.get(keys, function(result) {
+            const runtimeError = getRuntimeError();
+            if (runtimeError) {
+                if (isContextInvalidationError(runtimeError)) {
+                    markExtensionContextInvalidated(runtimeError);
+                }
+                if (callback) callback({}, runtimeError);
+                return;
+            }
+            if (callback) callback(result || {}, null);
+        });
+        return true;
+    } catch (e) {
+        if (isContextInvalidationError(e)) {
+            markExtensionContextInvalidated(e);
+        }
+        if (callback) callback({}, e);
+        return false;
+    }
+}
+
 function handleProfileMessage(a) {
     if (a.type === 4) {
-        console.log('📨 收到profile消息:', a);
+        debugLog('📨 收到profile消息:', a);
         if (a.profile === "undefined") {
-            console.log('⚠️ Profile为字符串"undefined"，重新加载页面');
+            debugLog('⚠️ Profile为字符串"undefined"，重新加载页面');
             window.location.reload();
         } else if (!a.profile) {
-            console.log('ℹ️ Profile为空或未设置（单环境页面），不重新加载');
+            debugLog('ℹ️ Profile为空或未设置（单环境页面），不重新加载');
             return;
         } else {
-            console.log('✅ 设置profile:', a.profile);
+            debugLog('✅ 设置profile:', a.profile);
             p(a.profile);
         }
     }
@@ -41,12 +173,43 @@ function disconnectProfilePort() {
     try {
         k.disconnect();
     } catch (q) {
-        console.log('扩展端口断开失败（可能已关闭）:', q.message);
+        debugLog('扩展端口断开失败（可能已关闭）:', q.message);
     }
     k = null;
 }
+function cleanupEnvironmentLabeling() {
+    if (environmentLabelState.titleObserver) {
+        try {
+            environmentLabelState.titleObserver.disconnect();
+        } catch (q) {}
+        environmentLabelState.titleObserver = null;
+    }
+    if (environmentLabelState.accountObserver) {
+        try {
+            environmentLabelState.accountObserver.disconnect();
+        } catch (q) {}
+        environmentLabelState.accountObserver = null;
+    }
+    if (environmentLabelState.faviconObserver) {
+        try {
+            environmentLabelState.faviconObserver.disconnect();
+        } catch (q) {}
+        environmentLabelState.faviconObserver = null;
+    }
+    if (environmentLabelState.refreshTimer) {
+        clearTimeout(environmentLabelState.refreshTimer);
+        environmentLabelState.refreshTimer = null;
+    }
+    if (environmentLabelState.heartbeatTimer) {
+        clearInterval(environmentLabelState.heartbeatTimer);
+        environmentLabelState.heartbeatTimer = null;
+    }
+}
 function connectProfilePort() {
     if (k) {
+        return;
+    }
+    if (!isExtensionContextReady()) {
         return;
     }
     try {
@@ -56,7 +219,8 @@ function connectProfilePort() {
         var profilePort = k;
         k.onMessage.addListener(handleProfileMessage);
         k.onDisconnect.addListener(function() {
-            console.log('扩展端口已关闭（页面可能进入bfcache）');
+            consumeRuntimeError('扩展端口已关闭');
+            debugLog('扩展端口已关闭（页面可能进入bfcache）');
             if (k === profilePort) {
                 k = null;
             }
@@ -67,7 +231,10 @@ function connectProfilePort() {
         });
     } catch (q) {
         k = null;
-        console.log('扩展连接失败（正常，在非扩展环境中运行）:', q.message);
+        if (isContextInvalidationError(q)) {
+            markExtensionContextInvalidated(q);
+        }
+        debugLog('扩展连接失败（正常，在非扩展环境中运行）:', q.message);
     }
 }
 connectProfilePort();
@@ -130,7 +297,7 @@ function r() {
 function p(a) {
     if (a !== null && a !== undefined) {
         a = String(a);
-        console.log('🔧 p()函数设置profile:', {
+        debugLog('🔧 p()函数设置profile:', {
             传入值: a,
             类型: typeof a,
             包含下划线: a.includes('_')
@@ -138,7 +305,7 @@ function p(a) {
         m = a;
         var markerIndex = m.indexOf("_@@@_");
         n = markerIndex >= 0 ? m.substr(0, markerIndex) : m;
-        console.log('🔧 设置结果:', {
+        debugLog('🔧 设置结果:', {
             m: m,
             n: n
         });
@@ -148,10 +315,10 @@ function p(a) {
 function t() {
     if (null === m) {
         // Send message to background script to handle cross-origin request
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             type: "10"
-        }, function(response) {
-            if (chrome.runtime.lastError) {
+        }, function(response, error) {
+            if (error) {
                 // Ignore error - connection might not be ready yet
                 return;
             }
@@ -162,41 +329,182 @@ function t() {
     }
 }
 document.addEventListener(7, function(a) {
-    a = a.detail;
-    t();
-    document.cookie = null === m ? a : m + a.trim()
+    try {
+        a = a.detail;
+        t();
+        document.cookie = null === m ? a : m + a.trim()
+    } catch (e) {
+        debugLog('Cookie写入事件已忽略（扩展上下文可能已失效）:', e.message);
+    }
 });
 document.addEventListener(8, function() {
-    t();
-    var a;
-    var b = document.cookie;
-    a = "";
-    if (b) {
-        var b = b.split("; "),
-            f;
-        for (f in b) {
-            if (m) {
-                if (b[f].substring(0, m.length) != m) {
-                    continue
-                }
-            } else {
-                if (-1 < b[f].indexOf("_@@@_")) {
-                    continue
-                }
-            }
-            a && (a += "; ");
-            a += m ? b[f].substring(m.length) : b[f]
-        }
-    }
     try {
-        localStorage.setItem("@@@cookies", a)
-    } catch (v) {
-        document.getElementById("@@@cookies") || (f = document.createElement("div"), f.setAttribute("id", "@@@cookies"), document.documentElement.appendChild(f), f.style.display = "none"), document.getElementById("@@@cookies").a = a
+        t();
+        var a;
+        var b = document.cookie;
+        a = "";
+        if (b) {
+            var b = b.split("; "),
+                f;
+            for (f in b) {
+                if (m) {
+                    if (b[f].substring(0, m.length) != m) {
+                        continue
+                    }
+                } else {
+                    if (-1 < b[f].indexOf("_@@@_")) {
+                        continue
+                    }
+                }
+                a && (a += "; ");
+                a += m ? b[f].substring(m.length) : b[f]
+            }
+        }
+        try {
+            localStorage.setItem("@@@cookies", a)
+        } catch (v) {
+            document.getElementById("@@@cookies") || (f = document.createElement("div"), f.setAttribute("id", "@@@cookies"), document.documentElement.appendChild(f), f.style.display = "none"), document.getElementById("@@@cookies").a = a
+        }
+    } catch (e) {
+        debugLog('Cookie读取事件已忽略（扩展上下文可能已失效）:', e.message);
     }
 });
 document.addEventListener(9, function(a) {
     u(a.detail)
 });
+
+function initRpcAdminAutoFill() {
+    const rpcCredentials = {
+        delegateCode: "service_appm",
+        password: "daf8aiOBK940a",
+        mobileNo: "19251018755"
+    };
+
+    function isRpcAdminLoginPage() {
+        const host = window.location.hostname;
+        const path = window.location.pathname.replace(/\/+$/, "");
+
+        if (path === "/rpc-admin") {
+            return (
+                (window.location.protocol === "http:" && host === "rpc.networkbench.com") ||
+                (window.location.protocol === "https:" && host === "rpcbeta.networkbench.com")
+            );
+        }
+
+        if (path !== "/cas/login") {
+            return false;
+        }
+
+        const serviceUrl = new URLSearchParams(window.location.search).get("service") || "";
+        let service;
+        try {
+            service = new URL(serviceUrl);
+        } catch (e) {
+            return false;
+        }
+
+        const servicePath = service.pathname.replace(/\/+$/, "");
+        const isProdCas = host === "account.tingyun.com" &&
+            service.protocol === "http:" &&
+            service.hostname === "rpc.networkbench.com" &&
+            servicePath.indexOf("/rpc-admin") === 0;
+        const isBetaCas = host === "account-beta.tingyun.com" &&
+            service.protocol === "https:" &&
+            service.hostname === "rpcbeta.networkbench.com" &&
+            servicePath.indexOf("/rpc-admin") === 0;
+
+        return isProdCas || isBetaCas;
+    }
+
+    function setInputValue(input, value) {
+        if (!input || input.value === value) {
+            return false;
+        }
+
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+        if (descriptor && descriptor.set) {
+            descriptor.set.call(input, value);
+        } else {
+            input.value = value;
+        }
+
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+    }
+
+    function fillRpcAdminCredentials() {
+        if (!isRpcAdminLoginPage()) {
+            return true;
+        }
+
+        const delegateCodeInput = document.getElementById("delegateCode") ||
+            document.querySelector('input[name="delegateCode"]');
+        const passwordInput = document.getElementById("password") ||
+            document.querySelector('input[name="password"]');
+        const mobileNoInput = document.getElementById("mobileNo") ||
+            document.querySelector('input[name="mobileNo"]');
+
+        if (!delegateCodeInput || !passwordInput || !mobileNoInput) {
+            return false;
+        }
+
+        setInputValue(delegateCodeInput, rpcCredentials.delegateCode);
+        setInputValue(passwordInput, rpcCredentials.password);
+        setInputValue(mobileNoInput, rpcCredentials.mobileNo);
+        return true;
+    }
+
+    if (!isRpcAdminLoginPage()) {
+        return;
+    }
+
+    let observer = null;
+    let fillTimer = null;
+    const startedAt = Date.now();
+
+    const stopWatching = function() {
+        if (observer) {
+            observer.disconnect();
+            observer = null;
+        }
+        if (fillTimer) {
+            clearTimeout(fillTimer);
+            fillTimer = null;
+        }
+    };
+
+    const tryFill = function() {
+        fillTimer = null;
+        if (fillRpcAdminCredentials() || Date.now() - startedAt >= 10000) {
+            stopWatching();
+            return;
+        }
+        scheduleTryFill();
+    };
+
+    const scheduleTryFill = function() {
+        if (fillTimer) {
+            return;
+        }
+        fillTimer = setTimeout(tryFill, 250);
+    };
+
+    if (document.documentElement) {
+        observer = new MutationObserver(scheduleTryFill);
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", tryFill, { once: true });
+    } else {
+        tryFill();
+    }
+}
+initRpcAdminAutoFill();
 
 function u(a) {
     if (!n) {
@@ -224,7 +532,7 @@ function ensureEnvironmentLabeling(nextTitle) {
         environmentLabelState.rawTitle = rawTitle;
     }
 
-    console.log('🔍 环境标签刷新:', {
+    debugLog('🔍 环境标签刷新:', {
         原始标题: environmentLabelState.rawTitle,
         profile变量n: n,
         提取的环境ID: envId,
@@ -255,9 +563,11 @@ function installEnvironmentObservers() {
                 subtree: true
             });
         } catch (e) {
-            console.log('标题监听安装失败:', e.message);
+            debugLog('标题监听安装失败:', e.message);
         }
     }
+
+    installWukongAccountObserver();
 
     if (!environmentLabelState.faviconObserver) {
         environmentLabelState.faviconObserver = new MutationObserver(function(mutations) {
@@ -282,7 +592,7 @@ function installEnvironmentObservers() {
                 subtree: false
             });
         } catch (e) {
-            console.log('Favicon监听安装失败:', e.message);
+            debugLog('Favicon监听安装失败:', e.message);
         }
     }
 
@@ -320,7 +630,8 @@ function setEnvironmentTitle(title) {
 
     const rawTitle = normalizePageTitle(title || document.title || environmentLabelState.rawTitle);
     environmentLabelState.rawTitle = rawTitle;
-    const desiredTitle = "[" + environmentLabelState.envId + "] " + rawTitle;
+    const accountTitle = getWukongAccountTitle();
+    const desiredTitle = accountTitle || ("[" + environmentLabelState.envId + "] " + rawTitle);
 
     if (document.title !== desiredTitle) {
         environmentLabelState.applyingTitle = true;
@@ -334,7 +645,97 @@ function setEnvironmentTitle(title) {
 function normalizePageTitle(title) {
     title = (title || "").toString().trim();
     title = title.replace(/^\s*(\[\d{1,3}\]|ENV\s*\d{1,3}|#\d{1,3})\s*[-|:·]?\s*/i, "");
+    title = title.replace(/^\s*【\d{1,3}】\s*/i, "");
     return title || location.hostname || "New Tab";
+}
+
+function isWukongAibWebPage() {
+    const href = location.href || "";
+    return href.indexOf("https://wukong1.tingyun.com/aib-web") === 0 ||
+        href.indexOf("https://wukong1beta.tingyun.com/aib-web") === 0;
+}
+
+function isWukongSingleSampleTaskPage() {
+    const href = location.href || "";
+    return href.indexOf("https://wukong1.tingyun.com/aib-web/#/single-sample2") >= 0 ||
+        href.indexOf("https://wukong1beta.tingyun.com/aib-web/#/single-sample2") >= 0;
+}
+
+function getWukongTaskName() {
+    if (!isWukongSingleSampleTaskPage()) {
+        return "";
+    }
+
+    const taskElement = document.querySelector("span.el-link--inner");
+    return taskElement && taskElement.textContent ?
+        taskElement.textContent.trim() :
+        "";
+}
+
+function getWukongLoginAccount() {
+    if (!isWukongAibWebPage()) {
+        environmentLabelState.lastAccountTitle = "";
+        return "";
+    }
+
+    const accountElement = document.querySelector("span.ml12.user-name, span.user-name");
+    const account = accountElement && accountElement.textContent ?
+        accountElement.textContent.trim() :
+        "";
+
+    return account;
+}
+
+function getWukongAccountTitle() {
+    if (!environmentLabelState.envId) {
+        return "";
+    }
+
+    const taskName = getWukongTaskName();
+    if (taskName) {
+        return "【" + environmentLabelState.envId + "】" + taskName;
+    }
+
+    const account = getWukongLoginAccount();
+    return account ? "【" + environmentLabelState.envId + "】" + account : "";
+}
+
+function installWukongAccountObserver() {
+    if (!isWukongAibWebPage()) {
+        if (environmentLabelState.accountObserver) {
+            environmentLabelState.accountObserver.disconnect();
+        }
+        return;
+    }
+
+    if (!environmentLabelState.accountObserver) {
+        environmentLabelState.accountObserver = new MutationObserver(function() {
+            const titleText = getWukongTaskName() || getWukongLoginAccount();
+            if (titleText !== environmentLabelState.lastAccountTitle) {
+                environmentLabelState.lastAccountTitle = titleText;
+                scheduleEnvironmentRefresh();
+                return;
+            }
+
+            if (titleText && document.title !== getWukongAccountTitle()) {
+                scheduleEnvironmentRefresh();
+            }
+        });
+    }
+
+    const observeTarget = document.body || document.documentElement;
+    if (observeTarget) {
+        try {
+            environmentLabelState.accountObserver.disconnect();
+            environmentLabelState.accountObserver.observe(observeTarget, {
+                childList: true,
+                characterData: true,
+                subtree: true
+            });
+        } catch (e) {
+            debugLog('悟空账号监听安装失败:', e.message);
+        }
+    }
 }
 
 /**
@@ -342,7 +743,7 @@ function normalizePageTitle(title) {
  * @param {string} profileId - 环境ID（可能是完整ID如"123456789_@@@_"或纯数字如"123456789"）
  */
 function extractEnvironmentId(profileId) {
-    console.log('🔍 extractEnvironmentId输入:', {
+    debugLog('🔍 extractEnvironmentId输入:', {
         profileId: profileId,
         类型: typeof profileId,
         包含下划线: profileId ? profileId.includes('_') : 'N/A'
@@ -359,15 +760,15 @@ function extractEnvironmentId(profileId) {
         // 完整格式，提取数字部分
         const numericPart = profileId.split('_')[0];
         envNumber = parseInt(numericPart, 10);
-        console.log('📋 完整格式处理:', { numericPart, envNumber });
+        debugLog('📋 完整格式处理:', { numericPart, envNumber });
     } else {
         // 纯数字格式，直接解析
         envNumber = parseInt(profileId, 10);
-        console.log('📋 纯数字格式处理:', { profileId, envNumber });
+        debugLog('📋 纯数字格式处理:', { profileId, envNumber });
     }
 
     if (isNaN(envNumber)) {
-        console.log('❌ 无法解析为数字，返回000');
+        debugLog('❌ 无法解析为数字，返回000');
         return '000';
     }
 
@@ -376,23 +777,23 @@ function extractEnvironmentId(profileId) {
     if (envNumber > 999) {
         const lastThree = envNumber % 1000;
         const result = lastThree.toString().padStart(3, '0');
-        console.log('📊 超大ID处理:', { envNumber, lastThree, result });
+        debugLog('📊 超大ID处理:', { envNumber, lastThree, result });
         return result;
     }
 
     // 转换为3位数字
     if (envNumber <= 0) {
-        console.log('📊 ID≤0，返回001');
+        debugLog('📊 ID≤0，返回001');
         return '001';
     }
     if (envNumber >= 999) {
-        console.log('📊 ID≥999，返回999');
+        debugLog('📊 ID≥999，返回999');
         return '999';
     }
 
     // 格式化为3位数字，前面补0
     const result = envNumber.toString().padStart(3, '0');
-    console.log('✅ 最终环境ID:', result);
+    debugLog('✅ 最终环境ID:', result);
     return result;
 }
 
@@ -403,7 +804,7 @@ function removeEnvironmentIndicator() {
     const indicator = document.getElementById('pm-environment-indicator');
     if (indicator) {
         indicator.remove();
-        console.log('已移除环境指示器');
+        debugLog('已移除环境指示器');
     }
 
     // 恢复原始favicon
@@ -411,6 +812,9 @@ function removeEnvironmentIndicator() {
 
     if (environmentLabelState.titleObserver) {
         environmentLabelState.titleObserver.disconnect();
+    }
+    if (environmentLabelState.accountObserver) {
+        environmentLabelState.accountObserver.disconnect();
     }
     if (environmentLabelState.faviconObserver) {
         environmentLabelState.faviconObserver.disconnect();
@@ -424,6 +828,7 @@ function removeEnvironmentIndicator() {
         environmentLabelState.heartbeatTimer = null;
     }
     environmentLabelState.lastFaviconKey = null;
+    environmentLabelState.lastAccountTitle = "";
 }
 
 /**
@@ -438,15 +843,16 @@ function restoreOriginalFavicon() {
 
         // 恢复原始favicon
         if (originalFavicon && originalFavicon !== 'none') {
+            const faviconContainer = document.head || document.documentElement;
             const link = document.createElement('link');
             link.rel = 'icon';
             link.href = originalFavicon;
-            document.head.appendChild(link);
+            faviconContainer.appendChild(link);
 
             const shortcutLink = document.createElement('link');
             shortcutLink.rel = 'shortcut icon';
             shortcutLink.href = originalFavicon;
-            document.head.appendChild(shortcutLink);
+            faviconContainer.appendChild(shortcutLink);
         }
     }
 }
@@ -509,7 +915,7 @@ function addEnvironmentIndicator(profileId) {
     // 修改favicon显示环境颜色
     updateEnvironmentFavicon(envId, color);
 
-    console.log('已添加环境指示器:', profileId, '→', envId, '(', color, ')');
+    debugLog('已添加环境指示器:', profileId, '→', envId, '(', color, ')');
 }
 
 /**
@@ -522,7 +928,7 @@ function updateEnvironmentFavicon(envId, color) {
         const links = document.querySelectorAll('link[rel~="icon"]:not([data-pm-favicon])');
         if (links.length > 0 && links[0].href) {
             document.documentElement.style.setProperty('--pm-original-favicon', links[0].href);
-            console.log('已保存原始favicon:', links[0].href);
+            debugLog('已保存原始favicon:', links[0].href);
         }
     }
 
@@ -561,15 +967,15 @@ function createColorFavicon(envId, color, originalFavicon) {
 
                 // 更新favicon
                 updateFavicon(canvas.toDataURL());
-                console.log('已更新favicon（带原始图标）:', envId, color);
+                debugLog('已更新favicon（带原始图标）:', envId, color);
             } catch (e) {
-                console.warn('无法绘制原始favicon，使用默认样式:', e);
+                debugWarn('无法绘制原始favicon，使用默认样式:', e);
                 createDefaultFavicon(ctx, color, envId);
                 updateFavicon(canvas.toDataURL());
             }
         };
         img.onerror = function() {
-            console.log('原始favicon加载失败，使用默认样式');
+            debugLog('原始favicon加载失败，使用默认样式');
             createDefaultFavicon(ctx, color, envId);
             updateFavicon(canvas.toDataURL());
         };
@@ -578,7 +984,7 @@ function createColorFavicon(envId, color, originalFavicon) {
         // 没有原始favicon，创建默认的
         createDefaultFavicon(ctx, color, envId);
         updateFavicon(canvas.toDataURL());
-        console.log('已更新favicon（默认样式）:', envId, color);
+        debugLog('已更新favicon（默认样式）:', envId, color);
     }
 }
 
@@ -657,6 +1063,8 @@ function createDefaultFavicon(ctx, color, envId) {
  * 更新页面favicon
  */
 function updateFavicon(dataUrl) {
+    const faviconContainer = document.head || document.documentElement;
+
     // 移除旧的favicon
     const oldLinks = document.querySelectorAll('link[rel="icon"][data-pm-favicon], link[rel="shortcut icon"][data-pm-favicon]');
     oldLinks.forEach(link => link.remove());
@@ -666,14 +1074,14 @@ function updateFavicon(dataUrl) {
     link.rel = 'icon';
     link.href = dataUrl;
     link.setAttribute('data-pm-favicon', 'true');
-    document.head.appendChild(link);
+    faviconContainer.appendChild(link);
 
     // 同时添加shortcut icon
     const shortcutLink = document.createElement('link');
     shortcutLink.rel = 'shortcut icon';
     shortcutLink.href = dataUrl;
     shortcutLink.setAttribute('data-pm-favicon', 'true');
-    document.head.appendChild(shortcutLink);
+    faviconContainer.appendChild(shortcutLink);
 }
 
 function isIconLink(link) {
@@ -716,27 +1124,45 @@ function getContrastColor(hexcolor) {
     const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
     return (yiq >= 128) ? '#000000' : '#ffffff';
 }
-chrome.runtime.onMessage.addListener(function(a) {
-    5 == a.type && (s(), u(document.title));
-    "3" == a.type && (p(""), document.title = document.title.replace(/\s*\[\d*\]\s*/g, ""), removeEnvironmentIndicator());
-});
+if (isExtensionContextReady()) {
+    try {
+        chrome.runtime.onMessage.addListener(function(a) {
+            5 == a.type && (s(), u(document.title));
+            "3" == a.type && (p(""), document.title = document.title.replace(/\s*\[\d*\]\s*/g, ""), removeEnvironmentIndicator());
+        });
+    } catch (e) {
+        if (isContextInvalidationError(e)) {
+            markExtensionContextInvalidated(e);
+        }
+        debugLog('扩展消息监听注册失败（上下文可能已失效）:', e.message);
+    }
+}
 // 使用 pagehide 替代 unload（支持bfcache且无权限限制）
 window.addEventListener('pagehide', function() {
     disconnectProfilePort();
     document.title = document.title.replace(/\s*\[\d*\]\s*/g, "");
 }, false);
 window.addEventListener('pageshow', function(event) {
+    if (extensionContextInvalidated) {
+        return;
+    }
     if (event.persisted || !k) {
-        console.log('页面从bfcache恢复，重新建立扩展端口');
+        debugLog('页面从bfcache恢复，重新建立扩展端口');
         connectProfilePort();
     }
 }, false);
+window.addEventListener('error', function(event) {
+    if (isContextInvalidationError(event.error || event.message)) {
+        markExtensionContextInvalidated(event.error || event.message);
+        event.preventDefault();
+    }
+});
 
 // Password Manager Pro Functionality
 (function() {
     'use strict';
 
-    console.log('密码管理器已加载 - Chrome风格增强版');
+    debugLog('密码管理器已加载 - Chrome风格增强版');
 
     // 全局变量
     let currentDropdown = null;
@@ -750,24 +1176,24 @@ window.addEventListener('pageshow', function(event) {
     function init() {
         // 防止重复初始化
         if (initDone) {
-            console.log('⚠️ 密码管理器已初始化，跳过重复初始化');
+            debugLog('⚠️ 密码管理器已初始化，跳过重复初始化');
             return;
         }
         initDone = true;
 
-        console.log('初始化密码管理器...');
+        debugLog('初始化密码管理器...');
 
         // 检查自动填充设置
-        chrome.storage.local.get(['pm_autoFill'], function(result) {
-            if (chrome.runtime.lastError) {
-                console.log('❌ 获取自动填充设置失败:', chrome.runtime.lastError.message);
+        safeStorageLocalGet(['pm_autoFill'], function(result, error) {
+            if (error) {
+                debugLog('❌ 获取自动填充设置失败:', error.message);
                 return;
             }
             if (result.pm_autoFill !== false) {
-                console.log('✅ 自动填充已启用');
+                debugLog('✅ 自动填充已启用');
                 setupAutoFill();
             } else {
-                console.log('ℹ️ 自动填充已禁用');
+                debugLog('ℹ️ 自动填充已禁用');
             }
         });
     }
@@ -779,12 +1205,12 @@ window.addEventListener('pageshow', function(event) {
     function setupAutoFill() {
         // 防止重复设置
         if (autoFillSetupDone) {
-            console.log('⚠️ 自动填充已设置，跳过重复设置');
+            debugLog('⚠️ 自动填充已设置，跳过重复设置');
             return;
         }
         autoFillSetupDone = true;
 
-        console.log('🚀 开始设置自动填充功能');
+        debugLog('🚀 开始设置自动填充功能');
 
         // 等待DOM完全加载
         if (document.readyState === 'loading') {
@@ -808,13 +1234,17 @@ window.addEventListener('pageshow', function(event) {
             }
         });
 
-        console.log('✅ 自动填充功能设置完成');
+        debugLog('✅ 自动填充功能设置完成');
     }
 
     /**
      * 监听新元素的添加
      */
     function observeNewElements() {
+        if (!document.body) {
+            document.addEventListener('DOMContentLoaded', observeNewElements, { once: true });
+            return;
+        }
         // 防抖计时器和标志
         let isObserving = false;
         let debounceTimer = null;
@@ -843,13 +1273,13 @@ window.addEventListener('pageshow', function(event) {
                                 if (node.id === 'pm-password-dropdown' ||
                                     node.classList.contains('pm-suggestion-item') ||
                                     node.classList.contains('pm-no-passwords')) {
-                                    console.log('⏭️ 忽略密码管理器DOM元素');
+                                    debugLog('⏭️ 忽略密码管理器DOM元素');
                                     return;
                                 }
 
                                 // 检查是否是密码输入框（已优化的：检查是否已设置）
                                 if (node.tagName === 'INPUT' && node.type === 'password' && !node.hasAttribute('data-pm-setup')) {
-                                    console.log('🆕 检测到新的密码输入框');
+                                    debugLog('🆕 检测到新的密码输入框');
                                     hasNewPasswordInputs = true;
                                     setupPasswordInput(node);
                                 }
@@ -858,7 +1288,7 @@ window.addEventListener('pageshow', function(event) {
                                 const inputs = node.querySelectorAll ?
                                     node.querySelectorAll('input[type="password"]:not([data-pm-setup])') : [];
                                 if (inputs.length > 0) {
-                                    console.log('🆕 检测到', inputs.length, '个新的密码输入框');
+                                    debugLog('🆕 检测到', inputs.length, '个新的密码输入框');
                                     hasNewPasswordInputs = true;
                                     inputs.forEach(setupPasswordInput);
                                 }
@@ -871,7 +1301,7 @@ window.addEventListener('pageshow', function(event) {
                 }
 
                 if (!hasNewPasswordInputs) {
-                    // console.log('🔍 DOM变化但无新密码输入框'); // 减少日志输出
+                    // debugLog('🔍 DOM变化但无新密码输入框'); // 减少日志输出
                 }
             }, 500); // 500ms防抖延迟
         });
@@ -881,7 +1311,7 @@ window.addEventListener('pageshow', function(event) {
             subtree: true
         });
 
-        console.log('✅ DOM观察器已启动（带防抖和元素过滤保护）');
+        debugLog('✅ DOM观察器已启动（带防抖和元素过滤保护）');
     }
 
     /**
@@ -891,15 +1321,15 @@ window.addEventListener('pageshow', function(event) {
     function detectLoginForms() {
         // 防止重复检测
         if (hasDetectedForms) {
-            console.log('⚠️ 已经检测过登录表单，跳过重复检测');
+            debugLog('⚠️ 已经检测过登录表单，跳过重复检测');
             return;
         }
 
-        console.log('检测登录表单...');
+        debugLog('检测登录表单...');
         hasDetectedForms = true;
 
         const passwordInputs = document.querySelectorAll('input[type="password"]:not([data-pm-setup])');
-        console.log('找到', passwordInputs.length, '个未设置的密码输入框');
+        debugLog('找到', passwordInputs.length, '个未设置的密码输入框');
 
         passwordInputs.forEach(function(passwordInput) {
             setupPasswordInput(passwordInput);
@@ -915,54 +1345,54 @@ window.addEventListener('pageshow', function(event) {
         }
         passwordInput.setAttribute('data-pm-setup', 'true');
 
-        console.log('设置密码输入框:', passwordInput);
+        debugLog('设置密码输入框:', passwordInput);
 
         const usernameInput = findUsernameInput(passwordInput);
         if (usernameInput) {
-            console.log('✅ 找到对应的用户名输入框:', usernameInput);
+            debugLog('✅ 找到对应的用户名输入框:', usernameInput);
 
             usernameInput.addEventListener('focus', function(e) {
-                console.log('🎯 用户名输入框获得焦点');
+                debugLog('🎯 用户名输入框获得焦点');
                 if (hasSelectedAccount) {
-                    console.log('ℹ️ 已选择过账号，不自动显示下拉框');
-                    console.log('💡 提示：双击输入框可重新显示账号列表');
+                    debugLog('ℹ️ 已选择过账号，不自动显示下拉框');
+                    debugLog('💡 提示：双击输入框可重新显示账号列表');
                     return;
                 }
-                console.log('🔍 查找密码建议');
+                debugLog('🔍 查找密码建议');
                 preloadPasswordData();
                 showPasswordSuggestions(usernameInput, passwordInput);
             });
 
             usernameInput.addEventListener('click', function(e) {
-                console.log('🖱️ 点击用户名输入框');
+                debugLog('🖱️ 点击用户名输入框');
                 if (hasSelectedAccount) {
-                    console.log('ℹ️ 已选择过账号，不自动显示下拉框');
+                    debugLog('ℹ️ 已选择过账号，不自动显示下拉框');
                     return;
                 }
-                console.log('🔍 查找密码建议');
+                debugLog('🔍 查找密码建议');
                 showPasswordSuggestions(usernameInput, passwordInput);
             });
 
             usernameInput.addEventListener('dblclick', function(e) {
-                console.log('🖱️🖱️ 双击用户名输入框，强制显示下拉框');
+                debugLog('🖱️🖱️ 双击用户名输入框，强制显示下拉框');
                 hasSelectedAccount = false;
                 preloadPasswordData();
                 showPasswordSuggestions(usernameInput, passwordInput, true);
             });
 
             passwordInput.addEventListener('focus', function(e) {
-                console.log('🎯 密码输入框获得焦点');
+                debugLog('🎯 密码输入框获得焦点');
                 if (hasSelectedAccount) {
-                    console.log('ℹ️ 已选择过账号，不自动显示下拉框');
+                    debugLog('ℹ️ 已选择过账号，不自动显示下拉框');
                     return;
                 }
-                console.log('🔍 查找密码建议');
+                debugLog('🔍 查找密码建议');
                 showPasswordSuggestions(usernameInput, passwordInput);
             });
         } else {
-            console.warn('⚠️ 未找到对应的用户名输入框');
+            debugWarn('⚠️ 未找到对应的用户名输入框');
             passwordInput.addEventListener('focus', function(e) {
-                console.log('🎯 密码输入框获得焦点（无用户名框）');
+                debugLog('🎯 密码输入框获得焦点（无用户名框）');
                 showPasswordSuggestions(null, passwordInput);
             });
         }
@@ -972,7 +1402,7 @@ window.addEventListener('pageshow', function(event) {
      * 处理输入框焦点
      */
     function handleInputFocus(input) {
-        console.log('输入框获得焦点:', input.type, input.name);
+        debugLog('输入框获得焦点:', input.type, input.name);
 
         if (input.type === 'password') {
             const usernameInput = findUsernameInput(input);
@@ -991,14 +1421,14 @@ window.addEventListener('pageshow', function(event) {
      * 查找用户名输入框（增强版 - 支持Google等复杂登录表单）
      */
     function findUsernameInput(passwordInput) {
-        console.log('🔍 查找用户名输入框...');
+        debugLog('🔍 查找用户名输入框...');
 
         // 方法1: 在同一表单中查找（扩展模式 - 包含Google特定模式）
         const form = passwordInput.closest('form');
         if (form) {
-            console.log('📋 在表单中查找');
+            debugLog('📋 在表单中查找');
             const allInputs = form.querySelectorAll('input');
-            console.log('表单中共有', allInputs.length, '个输入框');
+            debugLog('表单中共有', allInputs.length, '个输入框');
 
             for (const input of allInputs) {
                 if (input === passwordInput) continue;
@@ -1032,14 +1462,14 @@ window.addEventListener('pageshow', function(event) {
                     );
 
                 if (isUsernameField) {
-                    console.log('✅ 找到用户名输入框（方法1）:', input);
+                    debugLog('✅ 找到用户名输入框（方法1）:', input);
                     return input;
                 }
             }
         }
 
         // 方法1.5: Google特定检测 - 查找特定的输入框
-        console.log('🔍 执行Google特定检测');
+        debugLog('🔍 执行Google特定检测');
         const googleInputs = document.querySelectorAll('input[type="email"], input[type="text"]');
         for (const input of googleInputs) {
             if (input === passwordInput) continue;
@@ -1055,13 +1485,13 @@ window.addEventListener('pageshow', function(event) {
                 id === 'identifier' || id === 'email' ||
                 className.includes('whs') || // Google使用的类名前缀
                 ariaLabel.includes('email') || ariaLabel.includes('identifier')) {
-                console.log('✅ 找到Google用户名输入框（方法1.5）:', input);
+                debugLog('✅ 找到Google用户名输入框（方法1.5）:', input);
                 return input;
             }
         }
 
         // 方法2: 查找前面的兄弟元素
-        console.log('🔍 在兄弟元素中查找');
+        debugLog('🔍 在兄弟元素中查找');
         let prev = passwordInput.previousElementSibling;
         let searchCount = 0;
         while (prev && searchCount < 10) {
@@ -1070,7 +1500,7 @@ window.addEventListener('pageshow', function(event) {
             if (prev.tagName === 'INPUT') {
                 const type = prev.type.toLowerCase();
                 if (type === 'text' || type === 'email') {
-                    console.log('✅ 找到用户名输入框（方法2）:', prev);
+                    debugLog('✅ 找到用户名输入框（方法2）:', prev);
                     return prev;
                 }
             }
@@ -1078,7 +1508,7 @@ window.addEventListener('pageshow', function(event) {
             if (prev.tagName === 'DIV') {
                 const innerInput = prev.querySelector('input[type="text"], input[type="email"]');
                 if (innerInput) {
-                    console.log('✅ 找到用户名输入框（方法2-容器）:', innerInput);
+                    debugLog('✅ 找到用户名输入框（方法2-容器）:', innerInput);
                     return innerInput;
                 }
             }
@@ -1087,7 +1517,7 @@ window.addEventListener('pageshow', function(event) {
         }
 
         // 方法3: 查找父容器中的所有输入框
-        console.log('🔍 在父容器中查找');
+        debugLog('🔍 在父容器中查找');
         let container = passwordInput.parentElement;
         let containerSearchCount = 0;
         while (container && containerSearchCount < 3) {
@@ -1099,7 +1529,7 @@ window.addEventListener('pageshow', function(event) {
                 if (input.type === 'password') continue;
 
                 if (input.type === 'text' || input.type === 'email') {
-                    console.log('✅ 找到用户名输入框（方法3）:', input);
+                    debugLog('✅ 找到用户名输入框（方法3）:', input);
                     return input;
                 }
             }
@@ -1108,7 +1538,7 @@ window.addEventListener('pageshow', function(event) {
         }
 
         // 方法4: 全局搜索 - 最后的备用方案
-        console.log('🔍 全局搜索用户名输入框');
+        debugLog('🔍 全局搜索用户名输入框');
         const allTextInputs = document.querySelectorAll('input[type="text"], input[type="email"]');
         for (const input of allTextInputs) {
             if (input === passwordInput) continue;
@@ -1123,21 +1553,21 @@ window.addEventListener('pageshow', function(event) {
                 id.includes('user') || id.includes('email') || id.includes('login') || id.includes('identifier') ||
                 placeholder.includes('email') || placeholder.includes('user') ||
                 ariaLabel.includes('email') || ariaLabel.includes('user')) {
-                console.log('✅ 找到用户名输入框（方法4-全局搜索）:', input);
+                debugLog('✅ 找到用户名输入框（方法4-全局搜索）:', input);
                 return input;
             }
         }
 
         // 方法5: 位置启发式 - 取页面中第一个文本/email输入框
-        console.log('🔍 使用位置启发式方法');
+        debugLog('🔍 使用位置启发式方法');
         const firstTextInput = document.querySelector('input[type="text"]:not([type="password"]):not([type="hidden"]), input[type="email"]');
         if (firstTextInput && firstTextInput !== passwordInput) {
-            console.log('✅ 找到用户名输入框（方法5-位置启发式）:', firstTextInput);
+            debugLog('✅ 找到用户名输入框（方法5-位置启发式）:', firstTextInput);
             return firstTextInput;
         }
 
-        console.warn('❌ 未找到用户名输入框');
-        console.log('🔍 调试信息: 页面上的文本输入框数量:', document.querySelectorAll('input[type="text"], input[type="email"]').length);
+        debugWarn('❌ 未找到用户名输入框');
+        debugLog('🔍 调试信息: 页面上的文本输入框数量:', document.querySelectorAll('input[type="text"], input[type="email"]').length);
         return null;
     }
 
@@ -1180,41 +1610,41 @@ window.addEventListener('pageshow', function(event) {
         removeExistingDropdown();
 
         if (cachedPasswords.length > 0 && !forceReload) {
-            console.log('📦 使用缓存的密码数据:', cachedPasswords.length, '个');
+            debugLog('📦 使用缓存的密码数据:', cachedPasswords.length, '个');
             if (cachedPasswords.length > 0) {
                 renderDropdown(usernameInput, passwordInput, cachedPasswords);
             } else {
-                renderNoPasswordsDropdown(usernameInput);
+                renderNoPasswordsDropdown(usernameInput || passwordInput);
             }
             return;
         }
 
         const currentUrl = window.location.href;
-        console.log('🔍 查找密码建议:', currentUrl);
+        debugLog('🔍 查找密码建议:', currentUrl);
 
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'findPasswords',
             url: currentUrl
-        }, function(response) {
-            if (chrome.runtime.lastError) {
-                console.error('❌ 查找密码失败:', chrome.runtime.lastError);
+        }, function(response, error) {
+            if (error) {
+                debugError('❌ 查找密码失败:', error);
                 return;
             }
 
-            console.log('📋 密码查找结果:', response);
+            debugLog('📋 密码查找结果:', response);
 
             if (response && response.success && response.passwords) {
                 cachedPasswords = response.passwords;
-                console.log('💾 已缓存密码数据:', cachedPasswords.length, '个');
+                debugLog('💾 已缓存密码数据:', cachedPasswords.length, '个');
 
                 if (cachedPasswords.length > 0) {
                     renderDropdown(usernameInput, passwordInput, cachedPasswords);
                 } else {
-                    renderNoPasswordsDropdown(usernameInput);
+                    renderNoPasswordsDropdown(usernameInput || passwordInput);
                 }
             } else {
-                console.log('ℹ️ 没有找到保存的密码');
-                renderNoPasswordsDropdown(usernameInput);
+                debugLog('ℹ️ 没有找到保存的密码');
+                renderNoPasswordsDropdown(usernameInput || passwordInput);
             }
         });
     }
@@ -1222,7 +1652,7 @@ window.addEventListener('pageshow', function(event) {
     /**
      * 渲染无密码提示
      */
-    function renderNoPasswordsDropdown(usernameInput) {
+    function renderNoPasswordsDropdown(targetInput) {
         removeExistingDropdown();
 
         const dropdown = document.createElement('div');
@@ -1250,7 +1680,7 @@ window.addEventListener('pageshow', function(event) {
             </div>
         `;
 
-        positionDropdown(dropdown, usernameInput);
+        positionDropdown(dropdown, targetInput);
         document.body.appendChild(dropdown);
         currentDropdown = dropdown;
 
@@ -1488,7 +1918,7 @@ window.addEventListener('pageshow', function(event) {
 
         const filterHandler = function(e) {
             if (!usernameInput.value.trim()) {
-                console.log('🔄 输入框已清空，重置选择状态');
+                debugLog('🔄 输入框已清空，重置选择状态');
                 hasSelectedAccount = false;
             }
 
@@ -1498,18 +1928,18 @@ window.addEventListener('pageshow', function(event) {
 
             debounceTimer = setTimeout(function() {
                 const searchTerm = usernameInput.value.toLowerCase().trim();
-                console.log('🔍 过滤账号:', searchTerm);
+                debugLog('🔍 过滤账号:', searchTerm);
 
                 if (cachedPasswords.length > 0) {
                     if (!searchTerm) {
-                        console.log('📋 显示所有账号:', cachedPasswords.length);
+                        debugLog('📋 显示所有账号:', cachedPasswords.length);
                         renderDropdown(usernameInput, passwordInput, cachedPasswords, 0);
                     } else {
                         const filtered = cachedPasswords.filter(function(pwd) {
                             return pwd.username.toLowerCase().includes(searchTerm);
                         });
 
-                        console.log('📋 过滤后账号数:', filtered.length);
+                        debugLog('📋 过滤后账号数:', filtered.length);
 
                         if (filtered.length > 0) {
                             renderDropdown(usernameInput, passwordInput, filtered, 0);
@@ -1518,7 +1948,7 @@ window.addEventListener('pageshow', function(event) {
                         }
                     }
                 } else {
-                    console.log('⚠️ 无缓存数据，重新查询background');
+                    debugLog('⚠️ 无缓存数据，重新查询background');
                     showPasswordSuggestions(usernameInput, passwordInput, true);
                 }
             }, 80);
@@ -1574,6 +2004,12 @@ window.addEventListener('pageshow', function(event) {
      * 定位下拉框
      */
     function positionDropdown(dropdown, targetInput) {
+        if (!targetInput || !targetInput.getBoundingClientRect) {
+            dropdown.style.top = '8px';
+            dropdown.style.left = '8px';
+            dropdown.style.width = '250px';
+            return;
+        }
         const rect = targetInput.getBoundingClientRect();
         const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
         const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
@@ -1636,7 +2072,7 @@ window.addEventListener('pageshow', function(event) {
      * 填充凭据
      */
     function fillCredentials(usernameInput, passwordInput, passwordData) {
-        console.log('填充凭据:', passwordData.username);
+        debugLog('填充凭据:', passwordData.username);
 
         hasSelectedAccount = true;
 
@@ -1657,7 +2093,7 @@ window.addEventListener('pageshow', function(event) {
                 passwordInput.dispatchEvent(new Event('blur', {bubbles: true}));
             }, 100);
 
-            console.log('凭据填充完成');
+            debugLog('凭据填充完成');
         }, 100);
     }
 
@@ -1680,30 +2116,30 @@ window.addEventListener('pageshow', function(event) {
     function preloadPasswordData() {
         // 防止重复预加载
         if (preloadDone) {
-            console.log('⚠️ 密码数据已预加载，跳过重复预加载');
+            debugLog('⚠️ 密码数据已预加载，跳过重复预加载');
             return;
         }
         preloadDone = true;
 
         const currentUrl = window.location.href;
-        console.log('⚡ 预加载密码数据...');
+        debugLog('⚡ 预加载密码数据...');
 
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'findPasswords',
             url: currentUrl
-        }, function(response) {
-            if (chrome.runtime.lastError) {
-                console.log('💾 预加载失败（扩展端口关闭）:', chrome.runtime.lastError.message);
+        }, function(response, error) {
+            if (error) {
+                debugLog('💾 预加载失败（扩展端口关闭）:', error.message);
                 cachedPasswords = [];
                 return;
             }
 
             if (response && response.success && response.passwords) {
                 cachedPasswords = response.passwords;
-                console.log('💾 预加载完成，缓存', cachedPasswords.length, '个密码');
+                debugLog('💾 预加载完成，缓存', cachedPasswords.length, '个密码');
             } else {
                 cachedPasswords = [];
-                console.log('💾 预加载完成，无密码数据');
+                debugLog('💾 预加载完成，无密码数据');
             }
         });
     }
@@ -1720,14 +2156,14 @@ window.addEventListener('pageshow', function(event) {
     // 初始化（只执行一次）
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() {
-            console.log('📄 DOM加载完成，初始化密码管理器');
+            debugLog('📄 DOM加载完成，初始化密码管理器');
             setTimeout(init, 500);
         });
     } else {
-        console.log('📄 DOM已加载，立即初始化密码管理器');
+        debugLog('📄 DOM已加载，立即初始化密码管理器');
         setTimeout(init, 500);
     }
 
-    console.log('密码管理器脚本已就绪');
+    debugLog('密码管理器脚本已就绪');
 
 })();
