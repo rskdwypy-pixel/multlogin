@@ -1393,6 +1393,12 @@ window.addEventListener('error', function(event) {
     function handleInputFocus(input) {
         debugLog('输入框获得焦点:', input.type, input.name);
 
+        if (hasSelectedAccount) {
+            debugLog('已选择账号，忽略焦点触发的下拉框显示');
+            removeExistingDropdown();
+            return;
+        }
+
         if (input.type === 'password') {
             if (!input.hasAttribute('data-pm-setup')) {
                 setupPasswordInput(input);
@@ -1606,6 +1612,11 @@ window.addEventListener('error', function(event) {
     function showPasswordSuggestions(usernameInput, passwordInput, forceReload = false) {
         removeExistingDropdown();
 
+        if (hasSelectedAccount && !forceReload) {
+            debugLog('已选择账号，禁止自动重新显示账号列表');
+            return;
+        }
+
         if (cachedPasswords.length > 0 && !forceReload) {
             debugLog('📦 使用缓存的密码数据:', cachedPasswords.length, '个');
             if (cachedPasswords.length > 0) {
@@ -1629,6 +1640,12 @@ window.addEventListener('error', function(event) {
             }
 
             debugLog('📋 密码查找结果:', response);
+
+            if (hasSelectedAccount && !forceReload) {
+                debugLog('已选择账号，忽略延迟返回的密码建议');
+                removeExistingDropdown();
+                return;
+            }
 
             if (response && response.success && response.passwords) {
                 cachedPasswords = response.passwords;
@@ -1905,15 +1922,24 @@ window.addEventListener('error', function(event) {
      * 设置输入过滤
      */
     function setupInputFilter(usernameInput, passwordInput) {
-        if (!usernameInput || window.pmFilterHandler) {
-            if (usernameInput && window.pmFilterHandler) {
-                usernameInput.removeEventListener('input', window.pmFilterHandler);
-            }
+        if (window.pmFilterInput && window.pmFilterHandler) {
+            window.pmFilterInput.removeEventListener('input', window.pmFilterHandler);
+            window.pmFilterInput = null;
+            window.pmFilterHandler = null;
+        }
+
+        if (!usernameInput) {
+            return;
         }
 
         let debounceTimer;
 
         const filterHandler = function(e) {
+            if (hasSelectedAccount) {
+                debugLog('已选择账号，输入过滤暂不显示下拉框');
+                return;
+            }
+
             if (!usernameInput.value.trim()) {
                 debugLog('🔄 输入框已清空，重置选择状态');
                 hasSelectedAccount = false;
@@ -1924,6 +1950,12 @@ window.addEventListener('error', function(event) {
             }
 
             debounceTimer = setTimeout(function() {
+                if (hasSelectedAccount) {
+                    debugLog('已选择账号，忽略延迟过滤结果');
+                    removeExistingDropdown();
+                    return;
+                }
+
                 const searchTerm = usernameInput.value.toLowerCase().trim();
                 debugLog('🔍 过滤账号:', searchTerm);
 
@@ -1953,6 +1985,7 @@ window.addEventListener('error', function(event) {
 
         usernameInput.addEventListener('input', filterHandler);
         window.pmFilterHandler = filterHandler;
+        window.pmFilterInput = usernameInput;
     }
 
     /**
@@ -2060,9 +2093,14 @@ window.addEventListener('error', function(event) {
             window.pmKeyHandler = null;
         }
 
+        if (window.pmFilterInput && window.pmFilterHandler) {
+            window.pmFilterInput.removeEventListener('input', window.pmFilterHandler);
+        }
+
         window.pmDropdownItems = null;
         window.pmSelectedIndex = null;
         window.pmFilterHandler = null;
+        window.pmFilterInput = null;
     }
 
     /**
