@@ -11,7 +11,6 @@ var environmentLabelState = {
     accountObserver: null,
     faviconObserver: null,
     refreshTimer: null,
-    heartbeatTimer: null,
     lastAccountTitle: "",
     lastFaviconKey: null
 };
@@ -199,10 +198,6 @@ function cleanupEnvironmentLabeling() {
     if (environmentLabelState.refreshTimer) {
         clearTimeout(environmentLabelState.refreshTimer);
         environmentLabelState.refreshTimer = null;
-    }
-    if (environmentLabelState.heartbeatTimer) {
-        clearInterval(environmentLabelState.heartbeatTimer);
-        environmentLabelState.heartbeatTimer = null;
     }
 }
 function connectProfilePort() {
@@ -596,14 +591,6 @@ function installEnvironmentObservers() {
         }
     }
 
-    if (!environmentLabelState.heartbeatTimer) {
-        environmentLabelState.heartbeatTimer = setInterval(function() {
-            if (n) {
-                setEnvironmentTitle(document.title);
-                addEnvironmentIndicator(n);
-            }
-        }, 2000);
-    }
 }
 
 function scheduleEnvironmentRefresh() {
@@ -822,10 +809,6 @@ function removeEnvironmentIndicator() {
     if (environmentLabelState.refreshTimer) {
         clearTimeout(environmentLabelState.refreshTimer);
         environmentLabelState.refreshTimer = null;
-    }
-    if (environmentLabelState.heartbeatTimer) {
-        clearInterval(environmentLabelState.heartbeatTimer);
-        environmentLabelState.heartbeatTimer = null;
     }
     environmentLabelState.lastFaviconKey = null;
     environmentLabelState.lastAccountTitle = "";
@@ -1212,27 +1195,31 @@ window.addEventListener('error', function(event) {
 
         debugLog('🚀 开始设置自动填充功能');
 
+        const runInitialAutoFillScan = function() {
+            const passwordInputCount = detectLoginForms();
+            if (passwordInputCount > 0) {
+                setTimeout(preloadPasswordData, 500);
+                observeNewElements();
+            } else {
+                debugLog('当前页面未发现密码框，跳过密码预加载和DOM观察器');
+            }
+        };
+
         // 等待DOM完全加载
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', function() {
-                detectLoginForms();
-                setTimeout(preloadPasswordData, 500);
+                runInitialAutoFillScan();
             });
         } else {
-            detectLoginForms();
-            setTimeout(preloadPasswordData, 500);
+            runInitialAutoFillScan();
         }
 
-        // 监听动态加载的表单（只设置一次）
-        observeNewElements();
-
-        // 监听页面导航（只添加一次）
-        document.addEventListener('click', function(e) {
+        document.addEventListener('focusin', function(e) {
             const target = e.target;
-            if (target.tagName === 'INPUT') {
+            if (target && target.tagName === 'INPUT') {
                 handleInputFocus(target);
             }
-        });
+        }, true);
 
         debugLog('✅ 自动填充功能设置完成');
     }
@@ -1322,7 +1309,7 @@ window.addEventListener('error', function(event) {
         // 防止重复检测
         if (hasDetectedForms) {
             debugLog('⚠️ 已经检测过登录表单，跳过重复检测');
-            return;
+            return 0;
         }
 
         debugLog('检测登录表单...');
@@ -1334,6 +1321,8 @@ window.addEventListener('error', function(event) {
         passwordInputs.forEach(function(passwordInput) {
             setupPasswordInput(passwordInput);
         });
+
+        return passwordInputs.length;
     }
 
     /**
@@ -1405,13 +1394,21 @@ window.addEventListener('error', function(event) {
         debugLog('输入框获得焦点:', input.type, input.name);
 
         if (input.type === 'password') {
+            if (!input.hasAttribute('data-pm-setup')) {
+                setupPasswordInput(input);
+            }
             const usernameInput = findUsernameInput(input);
             if (usernameInput) {
                 showPasswordSuggestions(usernameInput, input);
+            } else {
+                showPasswordSuggestions(null, input);
             }
         } else if (input.type === 'text' || input.type === 'email') {
             const passwordInput = findRelatedPasswordInput(input);
             if (passwordInput) {
+                if (!passwordInput.hasAttribute('data-pm-setup')) {
+                    setupPasswordInput(passwordInput);
+                }
                 showPasswordSuggestions(input, passwordInput);
             }
         }

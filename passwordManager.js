@@ -213,20 +213,18 @@ var PasswordManager = (function() {
         let domain = '';
         try {
             const urlObj = new URL(url);
-            domain = urlObj.hostname;
+            domain = normalizeHost(urlObj.hostname);
         } catch (e) {
-            domain = url;
+            domain = normalizeHost(url);
         }
 
         getAllPasswords(function(passwords) {
             const matches = passwords.filter(pwd => {
                 try {
                     const pwdUrl = new URL(pwd.url);
-                    return pwdUrl.hostname === domain ||
-                           pwd.url.includes(domain) ||
-                           domain.includes(pwdUrl.hostname);
+                    return normalizeHost(pwdUrl.hostname) === domain;
                 } catch (e) {
-                    return pwd.url.includes(domain);
+                    return normalizeHost(pwd.url) === domain;
                 }
             });
 
@@ -235,6 +233,16 @@ var PasswordManager = (function() {
 
             callback(matches);
         });
+    }
+
+    function normalizeHost(host) {
+        return (host || "")
+            .toString()
+            .trim()
+            .toLowerCase()
+            .replace(/^https?:\/\//, "")
+            .split(/[/?#]/)[0]
+            .replace(/^www\./, "");
     }
 
     /**

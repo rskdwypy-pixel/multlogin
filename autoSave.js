@@ -31,7 +31,7 @@
     let loginSuccessDetected = false; // 登录成功检测
     let savePromptShown = false; // 是否已显示保存提示
     let extensionContextInvalidated = false;
-    let navigationTimer = null;
+    let navigationMonitorCleanup = null;
     let formObserver = null;
 
     function isContextInvalidationError(error) {
@@ -50,9 +50,9 @@
             } catch (e) {}
             formObserver = null;
         }
-        if (navigationTimer) {
-            clearInterval(navigationTimer);
-            navigationTimer = null;
+        if (navigationMonitorCleanup) {
+            navigationMonitorCleanup();
+            navigationMonitorCleanup = null;
         }
         removePromptBubble();
         if (error) {
@@ -184,83 +184,59 @@
             document.addEventListener('DOMContentLoaded', setupFormMonitoring, { once: true });
             return;
         }
-        // 监听页面上的所有表单
-        formObserver = new MutationObserver(function(mutations) {
-            mutations.forEach(function(mutation) {
-                mutation.addedNodes.forEach(function(node) {
-                    if (node.nodeType === 1) { // ELEMENT_NODE
-                        // 检查新添加的表单
-                        if (node.tagName === 'FORM') {
-                            setupLoginForm(node);
-                        }
-                        // 检查子节点中的表单
-                        const forms = node.querySelectorAll ? node.querySelectorAll('form') : [];
-                        forms.forEach(setupLoginForm);
-                    }
-                });
-            });
-        });
-
-        formObserver.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
-
-        // 立即检查现有表单
-        document.querySelectorAll('form').forEach(setupLoginForm);
-    }
-
-    /**
-     * 设置登录表单监控
-     */
-    function setupLoginForm(form) {
-        if (!form || form.hasAttribute('data-pm-form-monitored')) {
+        if (formObserver) {
             return;
         }
-        form.setAttribute('data-pm-form-monitored', 'true');
 
-        debugLog('监控表单:', form.action || form.id || form.className);
-
-        // 创建命名的事件处理函数（避免arguments.callee问题）
-        const formSubmitHandler = function(e) {
-            debugLog('检测到表单提交');
-            // 检查是否已经捕获过凭据，避免重复处理
-            if (form.hasAttribute('data-pm-submit-processing')) {
-                debugLog('表单正在处理中，跳过重复提交');
-                return;
+        const submitHandler = function(e) {
+            const form = e.target;
+            if (form && form.tagName === 'FORM') {
+                debugLog('检测到表单提交');
+                captureLoginForm(form);
             }
-            form.setAttribute('data-pm-submit-processing', 'true');
-            captureLoginForm(form, e, formSubmitHandler);
         };
 
-        // 监听表单提交
-        form.addEventListener('submit', formSubmitHandler);
+        const clickHandler = function(e) {
+            const target = e.target;
+            const button = target && target.closest ?
+                target.closest('button, input[type="submit"], input[type="button"]') :
+                null;
 
-        // 监听表单内的按钮点击（很多网站使用AJAX提交）
-        const submitButtons = form.querySelectorAll('button[type="submit"], input[type="submit"], button:not([type])');
-        submitButtons.forEach(function(button) {
-            if (!button.hasAttribute('data-pm-button-monitored')) {
-                button.setAttribute('data-pm-button-monitored', 'true');
-                button.addEventListener('click', function(e) {
-                    debugLog('检测到登录按钮点击');
-                    // 延迟检查，等待可能的登录成功
-                    setTimeout(function() {
-                        checkLoginSuccess(form);
-                    }, 1000);
-                });
+            if (!button || !isSubmitLikeControl(button)) {
+                return;
             }
-        });
+
+            const form = button.form || (button.closest ? button.closest('form') : null);
+            if (!form) {
+                return;
+            }
+
+            debugLog('检测到登录按钮点击');
+            captureLoginForm(form);
+        };
+
+        document.addEventListener('submit', submitHandler, true);
+        document.addEventListener('click', clickHandler, true);
+        formObserver = {
+            disconnect: function() {
+                document.removeEventListener('submit', submitHandler, true);
+                document.removeEventListener('click', clickHandler, true);
+            }
+        };
+        debugLog('自动保存表单监听已启动（事件委托模式）');
+    }
+
+    function isSubmitLikeControl(button) {
+        const tagName = button.tagName;
+        const type = (button.getAttribute('type') || '').toLowerCase();
+        return tagName === 'BUTTON' && (!type || type === 'submit') ||
+            tagName === 'INPUT' && (type === 'submit' || type === 'button');
     }
 
     /**
      * 捕获登录表单数据
      */
-    function captureLoginForm(form, event, handlerFunction) {
-        if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-        }
-
+    function captureLoginForm(form) {
         debugLog('捕获登录表单数据');
 
         // 查找用户名和密码输入框（改进的查找逻辑）
@@ -371,15 +347,6 @@
             hasUsernameInput: capturedCredentials.hasUsernameInput
         });
 
-        // 继续表单提交
-        if (event) {
-            // 移除监听器，避免重复触发（使用传入的处理函数）
-            if (handlerFunction) {
-                form.removeEventListener('submit', handlerFunction, false);
-            }
-            form.submit();
-        }
-
         // 延迟检查登录是否成功
         setTimeout(function() {
             checkLoginSuccess(form);
@@ -392,9 +359,17 @@
     function checkLoginSuccess(form) {
         debugLog('检查登录成功状态');
 
+        if (!capturedCredentials) {
+            debugLog('没有捕获到凭据，跳过登录成功判断');
+            return;
+        }
+
         // 检查页面URL是否发生变化（重定向）
         const currentUrl = window.location.href;
-        const originalUrl = capturedCredentials ? capturedCredentials.url : currentUrl;
+        const originalUrl = capturedCredentials.url;
+        const currentUrlChanged = normalizeUrlForLoginCheck(currentUrl) !== normalizeUrlForLoginCheck(originalUrl);
+        const urlChangedAwayFromLogin = currentUrlChanged &&
+            (isLikelyLoginUrl(originalUrl) || !isLikelyLoginUrl(currentUrl));
 
         // 检查是否显示用户信息（登录成功的标志）
         const userElements = document.querySelectorAll('.user-info, .username, .account-name, [class*="user" i], [class*="account" i]');
@@ -406,13 +381,12 @@
             }
         });
 
-        // 检查页面是否跳转到其他页面
-        const urlChanged = currentUrl !== originalUrl && !currentUrl.includes('login') && !currentUrl.includes('signin');
-
         // 检查表单是否消失
-        const formExists = document.body.contains(form);
+        const formExists = !!(form && document.body && document.body.contains(form));
+        const passwordInputsGone = !hasVisiblePasswordInput();
+        const loginFailed = hasVisibleLoginFailure();
 
-        if (isLoggedIn || urlChanged || !formExists) {
+        if (!loginFailed && (isLoggedIn || urlChangedAwayFromLogin || (!formExists && passwordInputsGone))) {
             debugLog('检测到登录成功');
             loginSuccessDetected = true;
             showSavePrompt();
@@ -421,31 +395,126 @@
         }
     }
 
+    function normalizeUrlForLoginCheck(url) {
+        try {
+            const parsed = new URL(url);
+            parsed.hash = '';
+            return parsed.toString();
+        } catch (e) {
+            return (url || '').split('#')[0];
+        }
+    }
+
+    function isLikelyLoginUrl(url) {
+        const value = (url || '').toString().toLowerCase();
+        return /login|signin|sign-in|auth|sso|cas\/login|passport|session/.test(value);
+    }
+
+    function hasVisiblePasswordInput() {
+        const inputs = document.querySelectorAll('input[type="password"]');
+        for (const input of inputs) {
+            if (isElementVisible(input)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function hasVisibleLoginFailure() {
+        const selectors = [
+            '[role="alert"]',
+            '.error',
+            '.errors',
+            '.error-message',
+            '.login-error',
+            '.ant-form-item-explain-error',
+            '.el-form-item__error',
+            '.invalid-feedback',
+            '.toast-error',
+            '.message-error'
+        ];
+        const failurePattern = /错误|失败|无效|不正确|不能为空|invalid|incorrect|failed|error|required/i;
+
+        for (const selector of selectors) {
+            const elements = document.querySelectorAll(selector);
+            for (const element of elements) {
+                const text = (element.textContent || element.innerText || '').trim();
+                if (text && failurePattern.test(text) && isElementVisible(element)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    function isElementVisible(element) {
+        if (!element || !element.getBoundingClientRect) {
+            return false;
+        }
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle ? window.getComputedStyle(element) : null;
+        return rect.width > 0 &&
+            rect.height > 0 &&
+            (!style || (style.visibility !== 'hidden' && style.display !== 'none'));
+    }
+
     /**
      * 设置导航监控
      */
     function setupNavigationMonitoring() {
-        // 监听URL变化
-        let lastUrl = window.location.href;
-        if (navigationTimer) {
+        if (navigationMonitorCleanup) {
             return;
         }
-        navigationTimer = setInterval(function() {
+
+        let lastUrl = window.location.href;
+        let pendingUrlCheck = null;
+
+        const checkForUrlChange = function() {
+            pendingUrlCheck = null;
             const currentUrl = window.location.href;
             if (currentUrl !== lastUrl) {
                 debugLog('URL发生变化:', lastUrl, '→', currentUrl);
 
                 // 如果从登录页面跳转到其他页面，检查是否登录成功
-                if (capturedCredentials && lastUrl.includes('login') && !currentUrl.includes('login')) {
+                if (capturedCredentials && isLikelyLoginUrl(lastUrl) && !isLikelyLoginUrl(currentUrl)) {
                     debugLog('从登录页面跳转，可能登录成功');
                     setTimeout(function() {
-                        showSavePrompt();
+                        checkLoginSuccess(capturedCredentials.form);
                     }, 1000);
                 }
 
                 lastUrl = currentUrl;
             }
-        }, 1000);
+        };
+
+        const scheduleUrlCheck = function(delay) {
+            if (pendingUrlCheck) {
+                clearTimeout(pendingUrlCheck);
+            }
+            pendingUrlCheck = setTimeout(checkForUrlChange, delay || 300);
+        };
+
+        const clickHandler = function() {
+            scheduleUrlCheck(800);
+        };
+        const stateHandler = function() {
+            scheduleUrlCheck(0);
+        };
+
+        document.addEventListener('click', clickHandler, true);
+        window.addEventListener('popstate', stateHandler);
+        window.addEventListener('hashchange', stateHandler);
+
+        navigationMonitorCleanup = function() {
+            if (pendingUrlCheck) {
+                clearTimeout(pendingUrlCheck);
+                pendingUrlCheck = null;
+            }
+            document.removeEventListener('click', clickHandler, true);
+            window.removeEventListener('popstate', stateHandler);
+            window.removeEventListener('hashchange', stateHandler);
+        };
     }
 
     /**

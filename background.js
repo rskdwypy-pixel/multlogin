@@ -361,19 +361,15 @@ var D;
 chrome.tabs.onActiveChanged.addListener(function (dataAndEvents, existingTab) {
     E(existingTab.windowId);
 });
-chrome.webRequest.onBeforeRequest.addListener(function (r) {
-    if ((r = r.tabId) && (!(0 > r) && (z(), "undefined" === typeof l[r]))) {
-        /** @type {number} */
-        r = 0;
-        /** @type {number} */
-        var g = (new Date).getTime();
-        for (; 500 > r - g; r = (new Date).getTime()) {
-        }
+chrome.webRequest.onBeforeRequest.addListener(function (details) {
+    var tabId = details.tabId;
+    if (tabId && !(0 > tabId) && "undefined" === typeof l[tabId]) {
+        z();
     }
 }, {
     urls: ["http://*/*", "https://*/*"],
     types: ["main_frame"]
-}, ["blocking", "requestBody"]);
+});
 chrome.webRequest.onBeforeSendHeaders.addListener(function (data) {
     var key = data.tabId;
     if (key && !(0 > key)) {
