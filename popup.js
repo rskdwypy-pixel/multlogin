@@ -6,9 +6,72 @@
 (function() {
     'use strict';
 
+    const DEBUG_LOGS = false;
+
+    function debugLog() {
+        if (DEBUG_LOGS) {
+            console.log.apply(console, arguments);
+        }
+    }
+
+    function debugError() {
+        if (DEBUG_LOGS) {
+            console.error.apply(console, arguments);
+        }
+    }
+
     // 全局变量
     let allPasswords = [];
     let filteredPasswords = [];
+
+    function getRuntimeError() {
+        try {
+            return chrome.runtime.lastError || null;
+        } catch (e) {
+            return e;
+        }
+    }
+
+    function safeRuntimeSendMessage(message, callback) {
+        try {
+            chrome.runtime.sendMessage(message, function(response) {
+                const runtimeError = getRuntimeError();
+                if (runtimeError) {
+                    if (callback) callback(null, runtimeError);
+                    return;
+                }
+                if (callback) callback(response, null);
+            });
+        } catch (e) {
+            if (callback) callback(null, e);
+        }
+    }
+
+    function safeStorageLocalGet(keys, callback) {
+        try {
+            chrome.storage.local.get(keys, function(result) {
+                const runtimeError = getRuntimeError();
+                if (runtimeError) {
+                    if (callback) callback({}, runtimeError);
+                    return;
+                }
+                if (callback) callback(result || {}, null);
+            });
+        } catch (e) {
+            if (callback) callback({}, e);
+        }
+    }
+
+    function safeStorageLocalSet(value, callback) {
+        try {
+            chrome.storage.local.set(value, function() {
+                const runtimeError = getRuntimeError();
+                if (callback) callback(runtimeError);
+            });
+        } catch (e) {
+            if (callback) callback(e);
+        }
+    }
 
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', function() {
@@ -89,23 +152,29 @@
      * 加载密码列表
      */
     function loadPasswords() {
-        console.log('开始加载密码列表');
+        debugLog('开始加载密码列表');
         showLoading(true);
 
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'getAllPasswords'
-        }, function(response) {
-            console.log('密码列表响应:', response);
+        }, function(response, error) {
+            debugLog('密码列表响应:', response);
             showLoading(false);
 
+            if (error) {
+                debugError('加载密码失败:', error.message || error);
+                showAlert('加载密码失败: ' + (error.message || '扩展通信失败'), 'error');
+                return;
+            }
+
             if (response && response.success && response.passwords) {
-                console.log('成功加载', response.passwords.length, '个密码');
+                debugLog('成功加载', response.passwords.length, '个密码');
                 allPasswords = response.passwords;
                 filteredPasswords = allPasswords;
                 updateStats();
                 displayPasswords(filteredPasswords);
             } else {
-                console.error('加载密码失败:', response);
+                debugError('加载密码失败:', response);
                 showAlert('加载密码失败: ' + (response ? response.error : '未知错误'), 'error');
             }
         });
@@ -151,7 +220,20 @@
                     <button class="btn btn-primary btn-small show-password-btn" data-id="${pwd.id}">👁️ 显示密码</button>
                     <button class="btn btn-secondary btn-small copy-username-btn" data-username="${escapeHtml(pwd.username)}">📋 复制用户名</button>
                     <button class="btn btn-secondary btn-small copy-password-btn" data-id="${pwd.id}">📋 复制密码</button>
+                    <button class="btn btn-secondary btn-small edit-password-btn" data-id="${pwd.id}">✏️ 修改密码</button>
                     <button class="btn btn-danger btn-small delete-btn" data-id="${pwd.id}">🗑️ 删除</button>
+                </div>
+                <div class="password-edit-form hidden" data-id="${pwd.id}">
+                    <div class="password-edit-row">
+                        <input type="password" class="new-password-input" placeholder="输入新密码">
+                    </div>
+                    <div class="password-edit-row">
+                        <input type="password" class="confirm-password-input" placeholder="再次输入新密码">
+                    </div>
+                    <div class="password-edit-actions">
+                        <button class="btn btn-primary btn-small save-password-edit-btn" data-id="${pwd.id}">保存</button>
+                        <button class="btn btn-secondary btn-small cancel-password-edit-btn" data-id="${pwd.id}">取消</button>
+                    </div>
                 </div>
             `;
 
@@ -179,6 +261,18 @@
             item.querySelector('.copy-password-btn').addEventListener('click', function() {
                 copyToClipboard(pwd.password);
                 showAlert('密码已复制', 'success');
+            });
+
+            item.querySelector('.edit-password-btn').addEventListener('click', function() {
+                openPasswordEditor(item, pwd);
+            });
+
+            item.querySelector('.save-password-edit-btn').addEventListener('click', function() {
+                savePasswordEdit(item, pwd);
+            });
+
+            item.querySelector('.cancel-password-edit-btn').addEventListener('click', function() {
+                closePasswordEditor(item);
             });
 
             item.querySelector('.delete-btn').addEventListener('click', function() {
@@ -209,6 +303,90 @@
     }
 
     /**
+     * 打开单个账号的密码编辑区域
+     */
+    function openPasswordEditor(item, pwd) {
+        const form = item.querySelector('.password-edit-form');
+        const input = item.querySelector('.new-password-input');
+        const confirmInput = item.querySelector('.confirm-password-input');
+        const editBtn = item.querySelector('.edit-password-btn');
+
+        form.classList.remove('hidden');
+        input.value = '';
+        confirmInput.value = '';
+        editBtn.disabled = true;
+        input.focus();
+    }
+
+    /**
+     * 关闭单个账号的密码编辑区域
+     */
+    function closePasswordEditor(item) {
+        const form = item.querySelector('.password-edit-form');
+        const editBtn = item.querySelector('.edit-password-btn');
+        const input = item.querySelector('.new-password-input');
+        const confirmInput = item.querySelector('.confirm-password-input');
+
+        form.classList.add('hidden');
+        input.value = '';
+        confirmInput.value = '';
+        editBtn.disabled = false;
+    }
+
+    /**
+     * 保存修改后的账号密码
+     */
+    function savePasswordEdit(item, pwd) {
+        const input = item.querySelector('.new-password-input');
+        const confirmInput = item.querySelector('.confirm-password-input');
+        const saveBtn = item.querySelector('.save-password-edit-btn');
+        const newPassword = input.value;
+        const confirmPassword = confirmInput.value;
+
+        if (!newPassword) {
+            showAlert('请输入新密码', 'error');
+            input.focus();
+            return;
+        }
+
+        if (newPassword !== confirmPassword) {
+            showAlert('两次输入的新密码不一致', 'error');
+            confirmInput.focus();
+            return;
+        }
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = '保存中...';
+
+        safeRuntimeSendMessage({
+            action: 'savePassword',
+            password: {
+                id: pwd.id,
+                name: pwd.name,
+                url: pwd.url,
+                username: pwd.username,
+                password: newPassword,
+                note: pwd.note || ''
+            }
+        }, function(response, error) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = '保存';
+
+            if (error) {
+                showAlert('修改密码失败: ' + (error.message || '扩展通信失败'), 'error');
+                return;
+            }
+
+            if (response && response.success) {
+                showAlert(`已更新 ${pwd.username} 的密码`, 'success');
+                loadPasswords();
+            } else {
+                showAlert('修改密码失败', 'error');
+            }
+        });
+    }
+
+    /**
      * 处理搜索
      */
     function handleSearch() {
@@ -234,26 +412,32 @@
             return;
         }
 
-        console.log('开始导入，CSV长度:', csv.length);
+        debugLog('开始导入，CSV长度:', csv.length);
 
         const importBtn = document.getElementById('import-btn');
         importBtn.disabled = true;
         importBtn.textContent = '导入中...';
 
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'importFromCSV',
             csv: csv
-        }, function(response) {
+        }, function(response, error) {
             importBtn.disabled = false;
             importBtn.textContent = '导入密码';
 
-            console.log('导入响应:', response);
+            debugLog('导入响应:', response);
+
+            if (error) {
+                debugError('导入失败:', error.message || error);
+                showAlert('导入失败: ' + (error.message || '扩展通信失败'), 'error');
+                return;
+            }
 
             if (response && response.success) {
                 const successCount = response.successCount || 0;
                 const errorCount = response.errorCount || 0;
 
-                console.log('导入完成:', successCount, '成功,', errorCount, '失败');
+                debugLog('导入完成:', successCount, '成功,', errorCount, '失败');
 
                 if (errorCount > 0) {
                     showAlert(`成功导入 ${successCount} 个密码，失败 ${errorCount} 个`, 'info');
@@ -265,11 +449,11 @@
 
                 // 延迟刷新，确保存储完成
                 setTimeout(function() {
-                    console.log('开始刷新密码列表');
+                    debugLog('开始刷新密码列表');
                     loadPasswords();
                 }, 500);
             } else {
-                console.error('导入失败:', response);
+                debugError('导入失败:', response);
                 showAlert('导入失败: ' + (response ? response.error : '未知错误'), 'error');
             }
         });
@@ -300,11 +484,16 @@
         exportBtn.disabled = true;
         exportBtn.textContent = '导出中...';
 
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'exportToCSV'
-        }, function(response) {
+        }, function(response, error) {
             exportBtn.disabled = false;
             exportBtn.textContent = '导出密码';
+
+            if (error) {
+                showAlert('导出失败: ' + (error.message || '扩展通信失败'), 'error');
+                return;
+            }
 
             if (response && response.success && response.csv) {
                 const csv = response.csv;
@@ -354,10 +543,14 @@
      * 删除密码
      */
     function deletePassword(id, username) {
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'deletePassword',
             id: id
-        }, function(response) {
+        }, function(response, error) {
+            if (error) {
+                showAlert('删除失败: ' + (error.message || '扩展通信失败'), 'error');
+                return;
+            }
             if (response && response.success) {
                 showAlert(`已删除 ${username} 的密码`, 'success');
                 loadPasswords();
@@ -379,9 +572,13 @@
             return;
         }
 
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'clearAllPasswords'
-        }, function(response) {
+        }, function(response, error) {
+            if (error) {
+                showAlert('清除失败: ' + (error.message || '扩展通信失败'), 'error');
+                return;
+            }
             if (response && response.success) {
                 showAlert('所有密码已清除', 'success');
                 loadPasswords();
@@ -395,11 +592,15 @@
      * 加载设置
      */
     function loadSettings() {
-        chrome.storage.local.get([
+        safeStorageLocalGet([
             'pm_autoFill',
             'pm_autoSave',
             'pm_showNotifications'
-        ], function(result) {
+        ], function(result, error) {
+            if (error) {
+                debugError('加载设置失败:', error.message || error);
+                return;
+            }
             document.getElementById('auto-fill-enabled').checked = result.pm_autoFill !== false;
             document.getElementById('auto-save-enabled').checked = result.pm_autoSave !== false;
             document.getElementById('notifications-enabled').checked = result.pm_showNotifications !== false;
@@ -410,8 +611,12 @@
      * 保存设置
      */
     function saveSetting(key, value) {
-        chrome.storage.local.set({[key]: value}, function() {
-            console.log('设置已保存:', key, value);
+        safeStorageLocalSet({[key]: value}, function(error) {
+            if (error) {
+                showAlert('设置保存失败: ' + (error.message || '扩展存储失败'), 'error');
+                return;
+            }
+            debugLog('设置已保存:', key, value);
         });
     }
 
@@ -475,7 +680,14 @@
      * 检查原始存储数据
      */
     function handleCheckStorage() {
-        chrome.storage.local.get('pm_passwords', function(result) {
+        safeStorageLocalGet('pm_passwords', function(result, error) {
+            if (error) {
+                document.getElementById('debug-result').innerHTML =
+                    '<div style="margin: 15px 0; color: #ef4444;">读取存储失败：' +
+                    escapeHtml(error.message || '扩展存储失败') +
+                    '</div>';
+                return;
+            }
             const passwords = result.pm_passwords || [];
 
             let html = '<div style="margin: 15px 0;">';
@@ -513,13 +725,17 @@
      * 检查解密状态
      */
     function handleCheckDecrypt() {
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'getAllPasswords'
-        }, function(response) {
+        }, function(response, error) {
             let html = '<div style="margin: 15px 0;">';
             html += '<strong>解密状态检查：</strong><br>';
 
-            if (response && response.success && response.passwords) {
+            if (error) {
+                html += '<span style="color: #ef4444;">解密检查失败：' +
+                    escapeHtml(error.message || '扩展通信失败') +
+                    '</span>';
+            } else if (response && response.success && response.passwords) {
                 html += '总密码数: <strong>' + response.passwords.length + '</strong><br><br>';
 
                 let successCount = 0;

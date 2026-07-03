@@ -6,25 +6,172 @@
 (function() {
     'use strict';
 
+    const DEBUG_LOGS = false;
+
+    function debugLog() {
+        if (DEBUG_LOGS) {
+            console.log.apply(console, arguments);
+        }
+    }
+
+    function debugWarn() {
+        if (DEBUG_LOGS) {
+            console.warn.apply(console, arguments);
+        }
+    }
+
+    function debugError() {
+        if (DEBUG_LOGS) {
+            console.error.apply(console, arguments);
+        }
+    }
+
     // 全局变量
     let capturedCredentials = null; // 捕获的凭据
     let loginSuccessDetected = false; // 登录成功检测
     let savePromptShown = false; // 是否已显示保存提示
+    let extensionContextInvalidated = false;
+    let navigationTimer = null;
+    let formObserver = null;
+
+    function isContextInvalidationError(error) {
+        const message = error && (error.message || String(error));
+        return /extension context invalidated|context invalidated|invalidated/i.test(message || "");
+    }
+
+    function markExtensionContextInvalidated(error) {
+        if (extensionContextInvalidated) {
+            return;
+        }
+        extensionContextInvalidated = true;
+        if (formObserver) {
+            try {
+                formObserver.disconnect();
+            } catch (e) {}
+            formObserver = null;
+        }
+        if (navigationTimer) {
+            clearInterval(navigationTimer);
+            navigationTimer = null;
+        }
+        removePromptBubble();
+        if (error) {
+            debugLog('扩展上下文已失效，自动保存模块停止扩展通信:', error.message || error);
+        }
+    }
+
+    function isExtensionContextReady() {
+        if (extensionContextInvalidated) {
+            return false;
+        }
+        try {
+            return typeof chrome !== "undefined" &&
+                chrome.runtime &&
+                !!chrome.runtime.id;
+        } catch (e) {
+            if (isContextInvalidationError(e)) {
+                markExtensionContextInvalidated(e);
+            }
+            return false;
+        }
+    }
+
+    function getRuntimeError() {
+        try {
+            return chrome.runtime.lastError || null;
+        } catch (e) {
+            return e;
+        }
+    }
+
+    function safeRuntimeSendMessage(message, callback) {
+        if (!isExtensionContextReady()) {
+            if (callback) callback(null, new Error("Extension context invalidated"));
+            return false;
+        }
+
+        try {
+            chrome.runtime.sendMessage(message, function(response) {
+                const runtimeError = getRuntimeError();
+                if (runtimeError) {
+                    if (isContextInvalidationError(runtimeError)) {
+                        markExtensionContextInvalidated(runtimeError);
+                    }
+                    if (callback) callback(null, runtimeError);
+                    return;
+                }
+                if (callback) callback(response, null);
+            });
+            return true;
+        } catch (e) {
+            if (isContextInvalidationError(e)) {
+                markExtensionContextInvalidated(e);
+            }
+            if (callback) callback(null, e);
+            return false;
+        }
+    }
+
+    function safeStorageLocalGet(keys, callback) {
+        if (!isExtensionContextReady() || !chrome.storage || !chrome.storage.local) {
+            if (callback) callback({}, new Error("Extension context invalidated"));
+            return false;
+        }
+
+        try {
+            chrome.storage.local.get(keys, function(result) {
+                const runtimeError = getRuntimeError();
+                if (runtimeError) {
+                    if (isContextInvalidationError(runtimeError)) {
+                        markExtensionContextInvalidated(runtimeError);
+                    }
+                    if (callback) callback({}, runtimeError);
+                    return;
+                }
+                if (callback) callback(result || {}, null);
+            });
+            return true;
+        } catch (e) {
+            if (isContextInvalidationError(e)) {
+                markExtensionContextInvalidated(e);
+            }
+            if (callback) callback({}, e);
+            return false;
+        }
+    }
+
+    function safeRuntimeGetURL(path) {
+        if (!isExtensionContextReady()) {
+            return '';
+        }
+        try {
+            return chrome.runtime.getURL(path);
+        } catch (e) {
+            if (isContextInvalidationError(e)) {
+                markExtensionContextInvalidated(e);
+            }
+            return '';
+        }
+    }
 
     /**
      * 初始化自动保存功能
      */
     function initAutoSave() {
-        console.log('初始化密码自动保存功能');
+        debugLog('初始化密码自动保存功能');
 
         // 检查自动保存设置
-        chrome.storage.local.get(['pm_autoSave'], function(result) {
+        safeStorageLocalGet(['pm_autoSave'], function(result, error) {
+            if (error) {
+                debugLog('自动保存设置读取失败（扩展上下文可能已失效）:', error.message);
+                return;
+            }
             if (result.pm_autoSave !== false) {
-                console.log('✅ 自动保存已启用');
+                debugLog('✅ 自动保存已启用');
                 setupFormMonitoring();
                 setupNavigationMonitoring();
             } else {
-                console.log('ℹ️ 自动保存已禁用');
+                debugLog('ℹ️ 自动保存已禁用');
             }
         });
     }
@@ -33,8 +180,12 @@
      * 设置表单监控
      */
     function setupFormMonitoring() {
+        if (!document.body) {
+            document.addEventListener('DOMContentLoaded', setupFormMonitoring, { once: true });
+            return;
+        }
         // 监听页面上的所有表单
-        const observer = new MutationObserver(function(mutations) {
+        formObserver = new MutationObserver(function(mutations) {
             mutations.forEach(function(mutation) {
                 mutation.addedNodes.forEach(function(node) {
                     if (node.nodeType === 1) { // ELEMENT_NODE
@@ -50,7 +201,7 @@
             });
         });
 
-        observer.observe(document.body, {
+        formObserver.observe(document.body, {
             childList: true,
             subtree: true
         });
@@ -68,14 +219,14 @@
         }
         form.setAttribute('data-pm-form-monitored', 'true');
 
-        console.log('监控表单:', form.action || form.id || form.className);
+        debugLog('监控表单:', form.action || form.id || form.className);
 
         // 创建命名的事件处理函数（避免arguments.callee问题）
         const formSubmitHandler = function(e) {
-            console.log('检测到表单提交');
+            debugLog('检测到表单提交');
             // 检查是否已经捕获过凭据，避免重复处理
             if (form.hasAttribute('data-pm-submit-processing')) {
-                console.log('表单正在处理中，跳过重复提交');
+                debugLog('表单正在处理中，跳过重复提交');
                 return;
             }
             form.setAttribute('data-pm-submit-processing', 'true');
@@ -91,7 +242,7 @@
             if (!button.hasAttribute('data-pm-button-monitored')) {
                 button.setAttribute('data-pm-button-monitored', 'true');
                 button.addEventListener('click', function(e) {
-                    console.log('检测到登录按钮点击');
+                    debugLog('检测到登录按钮点击');
                     // 延迟检查，等待可能的登录成功
                     setTimeout(function() {
                         checkLoginSuccess(form);
@@ -110,12 +261,12 @@
             event.stopPropagation();
         }
 
-        console.log('捕获登录表单数据');
+        debugLog('捕获登录表单数据');
 
         // 查找用户名和密码输入框（改进的查找逻辑）
         const passwordInput = form.querySelector('input[type="password"]');
         if (!passwordInput) {
-            console.log('未找到密码输入框，跳过');
+            debugLog('未找到密码输入框，跳过');
             return;
         }
 
@@ -145,7 +296,7 @@
             for (const input of inputs) {
                 if (input !== passwordInput && input.value && input.value.trim()) {
                     usernameInput = input;
-                    console.log('找到用户名输入框（方法1）:', input);
+                    debugLog('找到用户名输入框（方法1）:', input);
                     break;
                 }
             }
@@ -154,7 +305,7 @@
 
         // 方法2: 查找密码框之前的文本输入框
         if (!usernameInput) {
-            console.log('尝试方法2：查找密码框前的输入框');
+            debugLog('尝试方法2：查找密码框前的输入框');
             let prev = passwordInput.previousElementSibling;
             let searchCount = 0;
             while (prev && searchCount < 10) {
@@ -163,7 +314,7 @@
                     const type = prev.type.toLowerCase();
                     if (type === 'text' || type === 'email' || type === 'tel') {
                         usernameInput = prev;
-                        console.log('找到用户名输入框（方法2）:', prev);
+                        debugLog('找到用户名输入框（方法2）:', prev);
                         break;
                     }
                 }
@@ -173,14 +324,14 @@
 
         // 方法3: 查找同容器中的所有文本输入框
         if (!usernameInput) {
-            console.log('尝试方法3：查找同容器中的文本输入框');
+            debugLog('尝试方法3：查找同容器中的文本输入框');
             const container = passwordInput.parentElement;
             if (container) {
                 const allTextInputs = container.querySelectorAll('input[type="text"], input[type="email"], input:not([type="password"])');
                 for (const input of allTextInputs) {
                     if (input !== passwordInput && input.value && input.value.trim()) {
                         usernameInput = input;
-                        console.log('找到用户名输入框（方法3）:', input);
+                        debugLog('找到用户名输入框（方法3）:', input);
                         break;
                     }
                 }
@@ -188,9 +339,9 @@
         }
 
         if (usernameInput) {
-            console.log('✅ 找到用户名输入框:', usernameInput);
+            debugLog('✅ 找到用户名输入框:', usernameInput);
         } else {
-            console.log('⚠️ 无法找到用户名输入框，尝试创建临时标识符');
+            debugLog('⚠️ 无法找到用户名输入框，尝试创建临时标识符');
         }
 
         const username = usernameInput ? usernameInput.value.trim() : '';
@@ -200,7 +351,7 @@
         const finalUsername = username || 'unknown_user_' + Date.now().toString().slice(-4);
 
         if (!password) {
-            console.log('密码为空，跳过');
+            debugLog('密码为空，跳过');
             return;
         }
 
@@ -213,7 +364,7 @@
             hasUsernameInput: !!usernameInput
         };
 
-        console.log('已捕获凭据:', {
+        debugLog('已捕获凭据:', {
             username: finalUsername,
             password: '***',
             url: capturedCredentials.url,
@@ -239,7 +390,7 @@
      * 检查登录是否成功
      */
     function checkLoginSuccess(form) {
-        console.log('检查登录成功状态');
+        debugLog('检查登录成功状态');
 
         // 检查页面URL是否发生变化（重定向）
         const currentUrl = window.location.href;
@@ -262,11 +413,11 @@
         const formExists = document.body.contains(form);
 
         if (isLoggedIn || urlChanged || !formExists) {
-            console.log('检测到登录成功');
+            debugLog('检测到登录成功');
             loginSuccessDetected = true;
             showSavePrompt();
         } else {
-            console.log('未检测到登录成功，继续监控');
+            debugLog('未检测到登录成功，继续监控');
         }
     }
 
@@ -276,14 +427,17 @@
     function setupNavigationMonitoring() {
         // 监听URL变化
         let lastUrl = window.location.href;
-        setInterval(function() {
+        if (navigationTimer) {
+            return;
+        }
+        navigationTimer = setInterval(function() {
             const currentUrl = window.location.href;
             if (currentUrl !== lastUrl) {
-                console.log('URL发生变化:', lastUrl, '→', currentUrl);
+                debugLog('URL发生变化:', lastUrl, '→', currentUrl);
 
                 // 如果从登录页面跳转到其他页面，检查是否登录成功
                 if (capturedCredentials && lastUrl.includes('login') && !currentUrl.includes('login')) {
-                    console.log('从登录页面跳转，可能登录成功');
+                    debugLog('从登录页面跳转，可能登录成功');
                     setTimeout(function() {
                         showSavePrompt();
                     }, 1000);
@@ -299,56 +453,56 @@
      */
     function showSavePrompt() {
         if (!capturedCredentials || savePromptShown) {
-            console.log('跳过显示保存提示（无凭据或已显示）');
+            debugLog('跳过显示保存提示（无凭据或已显示）');
             return;
         }
 
         savePromptShown = true;
-        console.log('📋 准备显示保存提示');
+        debugLog('📋 准备显示保存提示');
 
         const username = capturedCredentials.username;
         const password = capturedCredentials.password;
         const url = capturedCredentials.url;
         const domain = extractDomain(url);
 
-        console.log('检查是否已存在密码:', { username, domain });
+        debugLog('检查是否已存在密码:', { username, domain });
 
         // 检查是否已存在此密码
-        chrome.runtime.sendMessage({
+        safeRuntimeSendMessage({
             action: 'findPasswords',
             url: url
-        }, function(response) {
-            if (chrome.runtime.lastError) {
-                console.log('密码查询失败（扩展端口可能已关闭）:', chrome.runtime.lastError.message);
+        }, function(response, error) {
+            if (error) {
+                debugLog('密码查询失败（扩展端口可能已关闭）:', error.message);
                 savePromptShown = false;
                 return;
             }
 
-            console.log('密码查询结果:', response);
+            debugLog('密码查询结果:', response);
 
             if (response && response.success && response.passwords) {
-                console.log('找到', response.passwords.length, '个密码');
+                debugLog('找到', response.passwords.length, '个密码');
                 const existingPassword = response.passwords.find(function(pwd) {
                     return pwd.username === username;
                 });
 
                 if (existingPassword) {
-                    console.log('找到已存在的密码');
+                    debugLog('找到已存在的密码');
                     // 检查密码是否相同
                     const isPasswordChanged = existingPassword.password !== password;
-                    console.log('密码是否改变:', isPasswordChanged);
+                    debugLog('密码是否改变:', isPasswordChanged);
                     if (isPasswordChanged) {
-                        console.log('密码已更改，显示更新提示');
+                        debugLog('密码已更改，显示更新提示');
                         showUpdatePrompt(domain, username, password);
                     } else {
-                        console.log('密码未变化，不显示提示');
+                        debugLog('密码未变化，不显示提示');
                     }
                 } else {
-                    console.log('新密码，显示保存提示');
+                    debugLog('新密码，显示保存提示');
                     showNewPasswordPrompt(domain, username, password);
                 }
             } else {
-                console.log('未找到响应或密码列表为空，显示默认提示');
+                debugLog('未找到响应或密码列表为空，显示默认提示');
                 showNewPasswordPrompt(domain, username, password);
             }
         });
@@ -393,7 +547,7 @@
         // 移除已存在的提示
         removePromptBubble();
 
-        console.log('创建提示气泡:', title, type);
+        debugLog('创建提示气泡:', title, type);
 
         const bubble = document.createElement('div');
         bubble.id = 'pm-save-bubble';
@@ -415,7 +569,7 @@
         `;
 
         document.body.appendChild(bubble);
-        console.log('气泡已添加到页面');
+        debugLog('气泡已添加到页面');
 
         // 定位气泡（左上角）
         setTimeout(function() {
@@ -432,7 +586,7 @@
         const actionsDiv = bubble.querySelector('.pm-bubble-actions');
 
         if (!actionsDiv) {
-            console.error('未找到pm-bubble-actions元素');
+            debugError('未找到pm-bubble-actions元素');
             return;
         }
 
@@ -452,12 +606,12 @@
             button.addEventListener('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
-                console.log('用户点击按钮:', action.text);
+                debugLog('用户点击按钮:', action.text);
                 handleBubbleAction(action.action, domain, username, password);
             });
 
             actionsDiv.appendChild(button);
-            console.log('添加按钮:', action.text);
+            debugLog('添加按钮:', action.text);
         });
     }
 
@@ -465,12 +619,12 @@
      * 处理气泡操作
      */
     function handleBubbleAction(action, domain, username, password) {
-        console.log('用户选择:', action);
+        debugLog('用户选择:', action);
 
         switch (action) {
             case 'save':
                 // 保存新密码
-                chrome.runtime.sendMessage({
+                safeRuntimeSendMessage({
                     action: 'savePassword',
                     password: {
                         name: domain,
@@ -478,9 +632,9 @@
                         username: username,
                         password: password
                     }
-                }, function(response) {
-                    if (chrome.runtime.lastError) {
-                        console.log('保存密码失败（扩展端口可能已关闭）:', chrome.runtime.lastError.message);
+                }, function(response, error) {
+                    if (error) {
+                        debugLog('保存密码失败（扩展端口可能已关闭）:', error.message);
                         showNotification('保存失败', 'error');
                         return;
                     }
@@ -496,7 +650,7 @@
 
             case 'update':
                 // 更新密码
-                chrome.runtime.sendMessage({
+                safeRuntimeSendMessage({
                     action: 'savePassword',
                     password: {
                         name: domain,
@@ -504,9 +658,9 @@
                         username: username,
                         password: password
                     }
-                }, function(response) {
-                    if (chrome.runtime.lastError) {
-                        console.log('更新密码失败（扩展端口可能已关闭）:', chrome.runtime.lastError.message);
+                }, function(response, error) {
+                    if (error) {
+                        debugLog('更新密码失败（扩展端口可能已关闭）:', error.message);
                         showNotification('更新失败', 'error');
                         return;
                     }
@@ -577,20 +731,25 @@
      * 显示通知
      */
     function showNotification(message, type = 'success') {
-        console.log('显示通知:', message);
+        debugLog('显示通知:', message);
 
         // 检查通知设置
-        chrome.storage.local.get(['pm_showNotifications'], function(result) {
-            if (result.pm_showNotifications === false) {
-                console.log('ℹ️ 通知已禁用，跳过显示');
+        safeStorageLocalGet(['pm_showNotifications'], function(result, error) {
+            if (error) {
                 return;
             }
+            if (result.pm_showNotifications === false) {
+                debugLog('ℹ️ 通知已禁用，跳过显示');
+                return;
+            }
+
+            const iconUrl = safeRuntimeGetURL('icon.png');
 
             // 检查是否支持通知API
             if ('Notification' in window && Notification.permission === 'granted') {
                 const notification = new Notification('密码管理器', {
                     body: message,
-                    icon: chrome.runtime.getURL('icon.png'),
+                    icon: iconUrl,
                     type: type
                 });
                 setTimeout(function() {
@@ -602,7 +761,7 @@
                     if (permission === 'granted') {
                         const notification = new Notification('密码管理器', {
                             body: message,
-                            icon: chrome.runtime.getURL('icon.png'),
+                            icon: iconUrl,
                             type: type
                         });
                         setTimeout(function() {
@@ -762,7 +921,7 @@
         }
     `;
 
-    document.head.appendChild(style);
+    (document.head || document.documentElement).appendChild(style);
 
     // 监听气泡关闭按钮
     document.addEventListener('click', function(e) {
@@ -771,6 +930,13 @@
         }
     });
 
-    console.log('自动保存模块已加载');
+    debugLog('自动保存模块已加载');
+
+    window.addEventListener('error', function(event) {
+        if (isContextInvalidationError(event.error || event.message)) {
+            markExtensionContextInvalidated(event.error || event.message);
+            event.preventDefault();
+        }
+    });
 
 })();

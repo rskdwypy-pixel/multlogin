@@ -1,9 +1,23 @@
+var DEBUG_LOGS = false;
+
+function debugLog() {
+    if (DEBUG_LOGS) {
+        console.log.apply(console, arguments);
+    }
+}
+
+function debugError() {
+    if (DEBUG_LOGS) {
+        console.error.apply(console, arguments);
+    }
+}
+
 // 调试代码：检查PasswordManager是否正确加载
 if (typeof PasswordManager !== 'undefined') {
-    console.log('✅ PasswordManager模块已加载到background页面');
-    console.log('PasswordManager方法:', Object.keys(PasswordManager));
+    debugLog('✅ PasswordManager模块已加载到background页面');
+    debugLog('PasswordManager方法:', Object.keys(PasswordManager));
 } else {
-    console.error('❌ PasswordManager模块未加载到background页面');
+    debugError('❌ PasswordManager模块未加载到background页面');
 }
 
 // Profile颜色映射系统
@@ -38,7 +52,7 @@ function getProfileColor(profileId) {
     profileColorMap[profileId] = color;
     colorIndex++;
 
-    console.log('为profile分配颜色:', profileId, '→', color);
+    debugLog('为profile分配颜色:', profileId, '→', color);
     return color;
 }
 
@@ -47,7 +61,7 @@ function getProfileColor(profileId) {
  */
 function clearProfileColor(profileId) {
     if (profileColorMap[profileId]) {
-        console.log('清除profile颜色:', profileId);
+        debugLog('清除profile颜色:', profileId);
         delete profileColorMap[profileId];
     }
 }
@@ -65,7 +79,7 @@ chrome.browserAction.onClicked.addListener(function () {
     chrome.storage.sync.set(option);
     chrome.tabs.create({}, function (props) {
         if (chrome.runtime.lastError) {
-            console.log('创建标签页失败:', chrome.runtime.lastError.message);
+            debugLog('创建标签页失败:', chrome.runtime.lastError.message);
             return;
         }
         p(props.id, props.id + "_@@@_");
@@ -159,7 +173,7 @@ function x(args) {
                 url: "https://chrome.google.com/webstore*"
             }, function (params) {
                 if (chrome.runtime.lastError) {
-                    console.log('查询webstore标签页失败:', chrome.runtime.lastError.message);
+                    debugLog('查询webstore标签页失败:', chrome.runtime.lastError.message);
                     return;
                 }
                 if (params && params[0]) {
@@ -167,7 +181,7 @@ function x(args) {
                     if (param.openerTabId) {
                         chrome.tabs.get(param.openerTabId, function ($location) {
                             if (chrome.runtime.lastError) {
-                                console.log('获取来源标签页失败（可能已关闭）:', chrome.runtime.lastError.message);
+                                debugLog('获取来源标签页失败（可能已关闭）:', chrome.runtime.lastError.message);
                                 return;
                             }
 //                            y("install&ce_url=" + param.url + "&ce_referrer=" + $location.url);
@@ -256,7 +270,7 @@ chrome.tabs.onRemoved.addListener(function (n) {
             // 清理profile颜色（当该profile没有其他标签页时）
             if (key === undefined) {
                 clearProfileColor(val);
-                console.log('标签页关闭，清理profile颜色:', val);
+                debugLog('标签页关闭，清理profile颜色:', val);
             }
         }
     }
@@ -318,7 +332,7 @@ function E(deepDataAndEvents) {
     if (deepDataAndEvents && deepDataAndEvents > -1) {
         chrome.windows.get(deepDataAndEvents, {}, function (row) {
             if (chrome.runtime.lastError) {
-                console.log('获取窗口信息失败:', chrome.runtime.lastError.message);
+                debugLog('获取窗口信息失败:', chrome.runtime.lastError.message);
                 return;
             }
             if (row) {
@@ -330,7 +344,7 @@ function E(deepDataAndEvents) {
                         windowId: C
                     }, function (results) {
                         if (chrome.runtime.lastError) {
-                            console.log('查询标签页失败:', chrome.runtime.lastError.message);
+                            debugLog('查询标签页失败:', chrome.runtime.lastError.message);
                             return;
                         }
                         if (results && results[0]) {
@@ -503,12 +517,12 @@ chrome.webNavigation.onDOMContentLoaded.addListener(function (details) {
         }, function(response) {
             // 检查并处理runtime.lastError（bfcache或content script未加载）
             if (chrome.runtime.lastError) {
-                console.log('页面消息发送失败（可能进入bfcache）:', tabId, '-', chrome.runtime.lastError.message);
+                debugLog('页面消息发送失败（可能进入bfcache）:', tabId, '-', chrome.runtime.lastError.message);
                 return;
             }
             // 正常处理响应
             if (response) {
-                console.log('页面消息响应:', response);
+                debugLog('页面消息响应:', response);
             }
         });
     }
@@ -518,6 +532,9 @@ chrome.webNavigation.onDOMContentLoaded.addListener(function (details) {
 chrome.runtime.onConnect.addListener(function (port) {
     var disconnected = false;
     port.onDisconnect.addListener(function() {
+        if (chrome.runtime.lastError) {
+            debugLog('端口已断开:', chrome.runtime.lastError.message);
+        }
         disconnected = true;
     });
     port.onMessage.addListener(function (statement) {
@@ -529,7 +546,7 @@ chrome.runtime.onConnect.addListener(function (port) {
                         profile: A(port.sender.tab.id)
                     });
                 } catch (e) {
-                    console.log('端口消息发送失败（页面可能进入bfcache）:', e.message);
+                    debugLog('端口消息发送失败（页面可能进入bfcache）:', e.message);
                 }
             }
         }
@@ -537,94 +554,126 @@ chrome.runtime.onConnect.addListener(function (port) {
 });
 
 chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
-    console.log('收到消息:', request);
+    try {
+        request = request || {};
+        debugLog('收到消息:', request);
 
-    // Handle MultiLogin messages (type-based)
-    if (request.type === "10") {
-        // Handle cross-origin request for profile
-        var tabId = sender.tab ? sender.tab.id : null;
-        if (tabId) {
-            var profile = A(tabId);
-            sendResponse({
-                profile: profile
+        // Handle MultiLogin messages (type-based)
+        if (request.type === "10") {
+            // Handle cross-origin request for profile
+            var tabId = sender.tab ? sender.tab.id : null;
+            if (tabId) {
+                var profile = A(tabId);
+                sendResponse({
+                    profile: profile
+                });
+                return true;
+            } else {
+                sendResponse({
+                    profile: ""
+                });
+                return true;
+            }
+        }
+
+        // Handle Password Manager messages (action-based)
+        const action = request.action || '';
+        debugLog('处理action:', action);
+
+        if (!action) {
+            debugLog('未处理的消息类型:', action);
+            sendResponse({success: false, error: '未处理的消息类型'});
+            return false;
+        }
+
+        if (typeof PasswordManager === 'undefined') {
+            sendResponse({success: false, error: 'PasswordManager模块未加载'});
+            return false;
+        }
+
+        if (action === 'findPasswords' || action === 'passwordManager_find') {
+            // Find passwords by URL
+            debugLog('处理findPasswords，URL:', request.url);
+            PasswordManager.findPasswordsByUrl(request.url, function(passwords) {
+                debugLog('findPasswords结果:', passwords.length, '个密码');
+                sendResponse({success: true, passwords: passwords});
+            });
+            return true; // Keep message channel open for async response
+
+        } else if (action === 'savePassword' || action === 'passwordManager_save') {
+            // Save a password
+            if (!request.password || !request.password.url || !request.password.username || !request.password.password) {
+                sendResponse({success: false, error: '密码数据不完整'});
+                return false;
+            }
+            debugLog('处理savePassword:', request.password);
+            PasswordManager.savePassword(request.password, function(success, data) {
+                debugLog('savePassword结果:', success);
+                sendResponse({success: success, data: data});
+            });
+            return true;
+
+        } else if (action === 'deletePassword' || action === 'passwordManager_delete') {
+            // Delete a password
+            if (!request.id) {
+                sendResponse({success: false, error: '缺少密码ID'});
+                return false;
+            }
+            debugLog('处理deletePassword，ID:', request.id);
+            PasswordManager.deletePassword(request.id, function(success) {
+                debugLog('deletePassword结果:', success);
+                sendResponse({success: success});
+            });
+            return true;
+
+        } else if (action === 'getAllPasswords' || action === 'passwordManager_getAll') {
+            // Get all passwords
+            debugLog('处理getAllPasswords');
+            PasswordManager.getAllPasswords(function(passwords) {
+                debugLog('getAllPasswords结果:', passwords.length, '个密码');
+                sendResponse({success: true, passwords: passwords});
+            });
+            return true;
+
+        } else if (action === 'importFromCSV' || action === 'passwordManager_import') {
+            // Import passwords from CSV
+            if (typeof request.csv !== 'string') {
+                sendResponse({success: false, error: 'CSV内容无效'});
+                return false;
+            }
+            debugLog('处理importFromCSV，CSV长度:', request.csv ? request.csv.length : 0);
+            PasswordManager.importFromCSV(request.csv, function(successCount, errorCount) {
+                debugLog('importFromCSV结果:', successCount, '成功,', errorCount, '失败');
+                sendResponse({success: true, successCount: successCount, errorCount: errorCount});
+            });
+            return true;
+
+        } else if (action === 'exportToCSV' || action === 'passwordManager_export') {
+            // Export passwords to CSV
+            debugLog('处理exportToCSV');
+            PasswordManager.exportToCSV(function(csv) {
+                debugLog('exportToCSV结果，CSV长度:', csv.length);
+                sendResponse({success: true, csv: csv});
+            });
+            return true;
+
+        } else if (action === 'clearAllPasswords' || action === 'passwordManager_clearAll') {
+            // Clear all passwords
+            debugLog('处理clearAllPasswords');
+            PasswordManager.clearAllPasswords(function(success) {
+                debugLog('clearAllPasswords结果:', success);
+                sendResponse({success: success});
             });
             return true;
         } else {
-            sendResponse({
-                profile: ""
-            });
-            return true;
+            debugLog('未处理的消息类型:', action);
+            sendResponse({success: false, error: '未处理的消息类型'});
+            return false;
         }
-    }
-
-    // Handle Password Manager messages (action-based)
-    const action = request.action || '';
-    console.log('处理action:', action);
-
-    if (action === 'findPasswords' || action === 'passwordManager_find') {
-        // Find passwords by URL
-        console.log('处理findPasswords，URL:', request.url);
-        PasswordManager.findPasswordsByUrl(request.url, function(passwords) {
-            console.log('findPasswords结果:', passwords.length, '个密码');
-            sendResponse({success: true, passwords: passwords});
-        });
-        return true; // Keep message channel open for async response
-
-    } else if (action === 'savePassword' || action === 'passwordManager_save') {
-        // Save a password
-        console.log('处理savePassword:', request.password);
-        PasswordManager.savePassword(request.password, function(success, data) {
-            console.log('savePassword结果:', success);
-            sendResponse({success: success, data: data});
-        });
-        return true;
-
-    } else if (action === 'deletePassword' || action === 'passwordManager_delete') {
-        // Delete a password
-        console.log('处理deletePassword，ID:', request.id);
-        PasswordManager.deletePassword(request.id, function(success) {
-            console.log('deletePassword结果:', success);
-            sendResponse({success: success});
-        });
-        return true;
-
-    } else if (action === 'getAllPasswords' || action === 'passwordManager_getAll') {
-        // Get all passwords
-        console.log('处理getAllPasswords');
-        PasswordManager.getAllPasswords(function(passwords) {
-            console.log('getAllPasswords结果:', passwords.length, '个密码');
-            sendResponse({success: true, passwords: passwords});
-        });
-        return true;
-
-    } else if (action === 'importFromCSV' || action === 'passwordManager_import') {
-        // Import passwords from CSV
-        console.log('处理importFromCSV，CSV长度:', request.csv ? request.csv.length : 0);
-        PasswordManager.importFromCSV(request.csv, function(successCount, errorCount) {
-            console.log('importFromCSV结果:', successCount, '成功,', errorCount, '失败');
-            sendResponse({success: true, successCount: successCount, errorCount: errorCount});
-        });
-        return true;
-
-    } else if (action === 'exportToCSV' || action === 'passwordManager_export') {
-        // Export passwords to CSV
-        console.log('处理exportToCSV');
-        PasswordManager.exportToCSV(function(csv) {
-            console.log('exportToCSV结果，CSV长度:', csv.length);
-            sendResponse({success: true, csv: csv});
-        });
-        return true;
-
-    } else if (action === 'clearAllPasswords' || action === 'passwordManager_clearAll') {
-        // Clear all passwords
-        console.log('处理clearAllPasswords');
-        PasswordManager.clearAllPasswords(function(success) {
-            console.log('clearAllPasswords结果:', success);
-            sendResponse({success: success});
-        });
-        return true;
-    } else {
-        console.log('未处理的消息类型:', action);
+    } catch (e) {
+        debugError('消息处理失败:', e);
+        sendResponse({success: false, error: e.message || String(e)});
+        return false;
     }
 });
 
@@ -674,17 +723,17 @@ function B(a, x) {
             tabId: a
         }, function() {
             if (chrome.runtime.lastError) {
-                console.log('设置badge背景色失败:', chrome.runtime.lastError.message);
+                debugLog('设置badge背景色失败:', chrome.runtime.lastError.message);
             }
         });
 
         chrome.browserAction.setBadgeText(expectedSerialization, function() {
             if (chrome.runtime.lastError) {
-                console.log('设置badge文本失败:', chrome.runtime.lastError.message);
+                debugLog('设置badge文本失败:', chrome.runtime.lastError.message);
             }
         });
 
-        console.log('设置badge:', {
+        debugLog('设置badge:', {
             profileId: x,
             badgeText: expectedSerialization.text,
             badgeColor: profileColor,
@@ -731,7 +780,7 @@ function F(e) {
         url: file
     }, function (props) {
         if (chrome.runtime.lastError) {
-            console.log('创建新标签页失败:', chrome.runtime.lastError.message);
+            debugLog('创建新标签页失败:', chrome.runtime.lastError.message);
             return;
         }
         p(props.id, props.id + "_@@@_");

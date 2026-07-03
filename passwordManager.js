@@ -7,6 +7,26 @@
 var PasswordManager = (function() {
     'use strict';
 
+    const DEBUG_LOGS = false;
+
+    function debugLog() {
+        if (DEBUG_LOGS) {
+            console.log.apply(console, arguments);
+        }
+    }
+
+    function debugWarn() {
+        if (DEBUG_LOGS) {
+            console.warn.apply(console, arguments);
+        }
+    }
+
+    function debugError() {
+        if (DEBUG_LOGS) {
+            console.error.apply(console, arguments);
+        }
+    }
+
     const STORAGE_KEY = 'pm_passwords';
     const ENCRYPTION_KEY = 'pm_encryption_key';
 
@@ -23,9 +43,10 @@ var PasswordManager = (function() {
      */
     function encrypt(text, key) {
         if (!text) return '';
+        text = unescape(encodeURIComponent(text));
         let result = '';
         for (let i = 0; i < text.length; i++) {
-            result += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+            result += String.fromCharCode(text.charCodeAt(i) ^ (key.charCodeAt(i % key.length) & 255));
         }
         return btoa(result); // Base64编码
     }
@@ -39,11 +60,16 @@ var PasswordManager = (function() {
             const text = atob(encoded); // Base64解码
             let result = '';
             for (let i = 0; i < text.length; i++) {
-                result += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+                result += String.fromCharCode(text.charCodeAt(i) ^ (key.charCodeAt(i % key.length) & 255));
             }
-            return result;
+            try {
+                return decodeURIComponent(escape(result));
+            } catch (unicodeError) {
+                // 兼容旧版本只包含ASCII字符的密文。
+                return result;
+            }
         } catch (e) {
-            console.error('解密错误:', e);
+            debugError('解密错误:', e);
             return '';
         }
     }
@@ -68,16 +94,16 @@ var PasswordManager = (function() {
      * 获取所有密码（解密后的）
      */
     function getAllPasswords(callback) {
-        console.log('获取所有密码');
+        debugLog('获取所有密码');
         getEncryptionKey(function(key) {
-            console.log('加密密钥已获取:', key.substring(0, 10) + '...');
+            debugLog('加密密钥已获取:', key.substring(0, 10) + '...');
             chrome.storage.local.get([STORAGE_KEY], function(result) {
-                console.log('存储读取结果:', result);
+                debugLog('存储读取结果:', result);
                 const passwords = result[STORAGE_KEY] || [];
-                console.log('找到', passwords.length, '个加密的密码');
+                debugLog('找到', passwords.length, '个加密的密码');
 
                 if (passwords.length === 0) {
-                    console.log('没有找到密码，返回空数组');
+                    debugLog('没有找到密码，返回空数组');
                     callback([]);
                     return;
                 }
@@ -86,7 +112,7 @@ var PasswordManager = (function() {
                 const decrypted = passwords.map(pwd => {
                     try {
                         const decryptedPassword = pwd.encrypted ? decrypt(pwd.password, key) : pwd.password;
-                        console.log('解密密码:', pwd.name, pwd.url, pwd.username, '密码长度:', decryptedPassword ? decryptedPassword.length : 0);
+                        debugLog('解密密码:', pwd.name, pwd.url, pwd.username, '密码长度:', decryptedPassword ? decryptedPassword.length : 0);
 
                         return {
                             id: pwd.id,
@@ -99,12 +125,12 @@ var PasswordManager = (function() {
                             lastUsed: pwd.lastUsed
                         };
                     } catch (e) {
-                        console.error('解密失败:', pwd.name, e);
+                        debugError('解密失败:', pwd.name, e);
                         return null;
                     }
                 }).filter(pwd => pwd !== null);
 
-                console.log('返回', decrypted.length, '个解密后的密码');
+                debugLog('返回', decrypted.length, '个解密后的密码');
                 callback(decrypted);
             });
         });
@@ -147,11 +173,11 @@ var PasswordManager = (function() {
                     // 更新现有密码
                     newPassword.id = passwords[existingIndex].id;
                     passwords[existingIndex] = newPassword;
-                    console.log('更新现有密码:', newPassword.name, newPassword.url, newPassword.username);
+                    debugLog('更新现有密码:', newPassword.name, newPassword.url, newPassword.username);
                 } else {
                     // 添加新密码
                     passwords.push(newPassword);
-                    console.log('添加新密码:', newPassword.name, newPassword.url, newPassword.username);
+                    debugLog('添加新密码:', newPassword.name, newPassword.url, newPassword.username);
                 }
 
                 // 保存到storage
@@ -216,7 +242,7 @@ var PasswordManager = (function() {
      * Chrome密码格式：name,url,username,password,note
      */
     function importFromCSV(csvText, callback) {
-        console.log('开始导入CSV，总长度:', csvText.length);
+        debugLog('开始导入CSV，总长度:', csvText.length);
 
         // 检查CSV编码并转换
         let processedCsv = csvText;
@@ -224,10 +250,10 @@ var PasswordManager = (function() {
             // 尝试检测BOM并处理UTF-8编码
             if (csvText.charCodeAt(0) === 0xFEFF) {
                 processedCsv = csvText.substring(1); // 移除BOM
-                console.log('检测到UTF-8 BOM，已移除');
+                debugLog('检测到UTF-8 BOM，已移除');
             }
         } catch (e) {
-            console.warn('CSV编码检测失败，使用原始文本:', e);
+            debugWarn('CSV编码检测失败，使用原始文本:', e);
         }
 
         const lines = processedCsv.split('\n');
@@ -241,22 +267,22 @@ var PasswordManager = (function() {
             const firstLine = lines[0].toLowerCase().trim();
             if (firstLine.startsWith('name') || firstLine.includes('url')) {
                 startIndex = 1;
-                console.log('跳过标题行:', lines[0].substring(0, 50));
+                debugLog('跳过标题行:', lines[0].substring(0, 50));
             }
         }
 
-        console.log('开始解析CSV行，总行数:', lines.length, '从第', startIndex, '行开始');
+        debugLog('开始解析CSV行，总行数:', lines.length, '从第', startIndex, '行开始');
 
         for (let i = startIndex; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) {
-                console.log('第', i, '行为空，跳过');
+                debugLog('第', i, '行为空，跳过');
                 continue;
             }
 
             // 解析CSV行（处理引号包裹的字段）
             const matches = parseCSVLine(line);
-            console.log('第', i, '行解析结果字段数:', matches ? matches.length : 0);
+            debugLog('第', i, '行解析结果字段数:', matches ? matches.length : 0);
 
             if (matches && matches.length >= 4) {
                 const name = matches[0] || '';
@@ -265,7 +291,7 @@ var PasswordManager = (function() {
                 const password = matches[3] || '';
                 const note = matches[4] || '';
 
-                console.log('解析密码项:', {
+                debugLog('解析密码项:', {
                     name: name || '(空)',
                     url: url || '(空)',
                     username: username || '(空)',
@@ -286,31 +312,31 @@ var PasswordManager = (function() {
                         password: password,
                         note: note
                     });
-                    console.log('✅ 添加密码项:', name, url, username);
+                    debugLog('✅ 添加密码项:', name, url, username);
                 } else {
-                    console.warn('⚠️ 跳过无效行，缺少必要字段');
-                    console.warn('  - URL有效:', hasUrl, '值:', url ? url.substring(0, 50) : '(空)');
-                    console.warn('  - Username有效:', hasUsername, '值:', username ? username.substring(0, 50) : '(空)');
-                    console.warn('  - Password有效:', hasPassword, '长度:', password ? password.length : 0);
-                    console.warn('  - 原始行前100字符:', line.substring(0, 100));
+                    debugWarn('⚠️ 跳过无效行，缺少必要字段');
+                    debugWarn('  - URL有效:', hasUrl, '值:', url ? url.substring(0, 50) : '(空)');
+                    debugWarn('  - Username有效:', hasUsername, '值:', username ? username.substring(0, 50) : '(空)');
+                    debugWarn('  - Password有效:', hasPassword, '长度:', password ? password.length : 0);
+                    debugWarn('  - 原始行前100字符:', line.substring(0, 100));
                     errorCount++;
                 }
             } else {
-                console.warn('❌ 无法解析CSV行，字段数不足');
-                console.warn('  行内容:', line.substring(0, 100));
-                console.warn('  解析结果字段数:', matches ? matches.length : 0);
-                console.warn('  解析结果:', matches);
+                debugWarn('❌ 无法解析CSV行，字段数不足');
+                debugWarn('  行内容:', line.substring(0, 100));
+                debugWarn('  解析结果字段数:', matches ? matches.length : 0);
+                debugWarn('  解析结果:', matches);
                 errorCount++;
             }
         }
 
-        console.log('CSV解析完成，找到', passwords.length, '个有效密码，跳过', errorCount, '个无效行');
+        debugLog('CSV解析完成，找到', passwords.length, '个有效密码，跳过', errorCount, '个无效行');
 
         // 去重逻辑
         getEncryptionKey(function(key) {
             chrome.storage.local.get([STORAGE_KEY], function(result) {
                 const existingPasswords = result[STORAGE_KEY] || [];
-                console.log('数据库中已有', existingPasswords.length, '个密码');
+                debugLog('数据库中已有', existingPasswords.length, '个密码');
 
                 // 创建已存在密码的集合（基于URL+用户名）
                 const existingKeys = new Set();
@@ -334,46 +360,46 @@ var PasswordManager = (function() {
                         if (!existingKeys.has(key)) {
                             uniquePasswords.push(pwd);
                         } else {
-                            console.log('跳过已存在的密码:', pwd.name, pwd.url, pwd.username);
+                            debugLog('跳过已存在的密码:', pwd.name, pwd.url, pwd.username);
                         }
                     } else {
-                        console.log('跳过CSV中的重复密码:', pwd.name, pwd.url, pwd.username);
+                        debugLog('跳过CSV中的重复密码:', pwd.name, pwd.url, pwd.username);
                     }
                 });
 
-                console.log('最终要保存的密码数量:', uniquePasswords.length, '(CSV原:', passwords.length, ', 去重:', passwords.length - uniquePasswords.length, ')');
+                debugLog('最终要保存的密码数量:', uniquePasswords.length, '(CSV原:', passwords.length, ', 去重:', passwords.length - uniquePasswords.length, ')');
 
                 if (uniquePasswords.length === 0) {
-                    console.warn('没有新的密码需要导入');
+                    debugWarn('没有新的密码需要导入');
                     callback(0, 0);
                     return;
                 }
 
-                console.log('开始队列保存', uniquePasswords.length, '个新密码（避免竞争条件）');
+                debugLog('开始队列保存', uniquePasswords.length, '个新密码（避免竞争条件）');
 
                 // 使用队列机制逐个保存，避免竞争条件
                 let currentIndex = 0;
 
                 function saveNext() {
                     if (currentIndex >= uniquePasswords.length) {
-                        console.log('🎉 所有密码保存完成:', successCount, '成功,', errorCount, '失败');
+                        debugLog('🎉 所有密码保存完成:', successCount, '成功,', errorCount, '失败');
                         callback(successCount, errorCount);
                         return;
                     }
 
                     const pwd = uniquePasswords[currentIndex];
-                    console.log('保存密码', currentIndex + 1, '/', uniquePasswords.length, ':', pwd.name, pwd.url, pwd.username);
+                    debugLog('保存密码', currentIndex + 1, '/', uniquePasswords.length, ':', pwd.name, pwd.url, pwd.username);
 
                     // 使用forceAdd=true确保不会因为重复检查而丢失密码
                     savePassword(pwd, function(success, data) {
-                        console.log('密码保存结果:', success, data ? data.name : 'null');
+                        debugLog('密码保存结果:', success, data ? data.name : 'null');
 
                         if (success) {
                             successCount++;
-                            console.log('✅ 成功保存密码', successCount, '/', uniquePasswords.length);
+                            debugLog('✅ 成功保存密码', successCount, '/', uniquePasswords.length);
                         } else {
                             errorCount++;
-                            console.error('❌ 保存密码失败', errorCount);
+                            debugError('❌ 保存密码失败', errorCount);
                         }
 
                         currentIndex++;
