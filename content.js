@@ -15,6 +15,13 @@ var environmentLabelState = {
     lastFaviconKey: null
 };
 var extensionContextInvalidated = false;
+var profileResolved = false;
+var profileRequestInFlight = false;
+var emptyProfileRetryCount = 0;
+var pendingCookieWrites = [];
+var MAX_EMPTY_PROFILE_RETRIES = 5;
+var EMPTY_PROFILE_RETRY_DELAY = 80;
+var STORAGE_PROFILE_EVENT = "__ml_set_storage_profile__";
 var DEBUG_LOGS = false;
 
 function debugLog() {
@@ -32,6 +39,14 @@ function debugWarn() {
 function debugError() {
     if (DEBUG_LOGS) {
         console.error.apply(console, arguments);
+    }
+}
+
+function isTopFrame() {
+    try {
+        return window.top === window.self;
+    } catch (e) {
+        return true;
     }
 }
 
@@ -151,7 +166,13 @@ function handleProfileMessage(a) {
             debugLog('⚠️ Profile为字符串"undefined"，重新加载页面');
             window.location.reload();
         } else if (!a.profile) {
-            debugLog('ℹ️ Profile为空或未设置（单环境页面），不重新加载');
+            if (a.pending) {
+                debugLog('ℹ️ Profile暂为空，短暂重试以避免新标签初始化竞态');
+                handleEmptyProfileResponse();
+            } else {
+                debugLog('ℹ️ Profile为空或未设置（单环境页面）');
+                p("");
+            }
             return;
         } else {
             debugLog('✅ 设置profile:', a.profile);
@@ -163,6 +184,10 @@ function cleanupExtensionUi() {
     var dropdown = document.getElementById('pm-password-dropdown');
     if (dropdown) {
         dropdown.remove();
+    }
+    var applePanel = document.getElementById('pm-apple-developer-account-panel');
+    if (applePanel) {
+        applePanel.remove();
     }
 }
 function disconnectProfilePort() {
@@ -232,6 +257,380 @@ function connectProfilePort() {
         debugLog('扩展连接失败（正常，在非扩展环境中运行）:', q.message);
     }
 }
+function installStorageIsolation() {
+    var storageScript = `
+        (function() {
+            if (window.__mlStorageIsolationInstalled) {
+                return;
+            }
+            window.__mlStorageIsolationInstalled = true;
+
+            var PROFILE_EVENT = "__ml_set_storage_profile__";
+            var KEY_PREFIX = "__ml_profile_storage__:";
+            var profile = null;
+            var nativeLocalStorage = null;
+            var nativeSessionStorage = null;
+            var localStorageProxy = null;
+            var sessionStorageProxy = null;
+            var redispatchingStorageEvent = false;
+
+            try {
+                nativeLocalStorage = window.localStorage;
+            } catch (e) {}
+
+            try {
+                nativeSessionStorage = window.sessionStorage;
+            } catch (e) {}
+
+            if (!nativeLocalStorage && !nativeSessionStorage) {
+                return;
+            }
+
+            var storageProto = nativeLocalStorage ?
+                Object.getPrototypeOf(nativeLocalStorage) :
+                Object.getPrototypeOf(nativeSessionStorage);
+            var native = {
+                getItem: storageProto.getItem,
+                setItem: storageProto.setItem,
+                removeItem: storageProto.removeItem,
+                clear: storageProto.clear,
+                key: storageProto.key
+            };
+            var lengthDescriptor = Object.getOwnPropertyDescriptor(storageProto, "length") ||
+                Object.getOwnPropertyDescriptor(Storage.prototype, "length");
+
+            function getNativeLength(area) {
+                if (lengthDescriptor && lengthDescriptor.get) {
+                    return lengthDescriptor.get.call(area);
+                }
+                return area.length || 0;
+            }
+
+            function unwrapArea(area) {
+                if (area === localStorageProxy) return nativeLocalStorage;
+                if (area === sessionStorageProxy) return nativeSessionStorage;
+                return area;
+            }
+
+            function isManagedArea(area) {
+                area = unwrapArea(area);
+                return area && (area === nativeLocalStorage || area === nativeSessionStorage);
+            }
+
+            function normalizeKey(key) {
+                return String(key);
+            }
+
+            function isInternalKey(key) {
+                key = normalizeKey(key);
+                return key.indexOf("@@@") === 0 || key.indexOf("__ml_") === 0;
+            }
+
+            function isIsolated() {
+                return profile !== null && profile !== "";
+            }
+
+            function getStoragePrefix() {
+                return KEY_PREFIX + encodeURIComponent(profile) + ":";
+            }
+
+            function getScopedKey(key) {
+                return getStoragePrefix() + normalizeKey(key);
+            }
+
+            function getVisibleKeys(area) {
+                area = unwrapArea(area);
+                if (!isManagedArea(area) || !isIsolated()) {
+                    return null;
+                }
+
+                var prefix = getStoragePrefix();
+                var keys = [];
+                var total = getNativeLength(area);
+                for (var i = 0; i < total; i++) {
+                    var storedKey = native.key.call(area, i);
+                    if (storedKey && storedKey.indexOf(prefix) === 0) {
+                        keys.push(storedKey.substring(prefix.length));
+                    }
+                }
+                return keys;
+            }
+
+            function getItem(area, key) {
+                area = unwrapArea(area);
+                key = normalizeKey(key);
+                if (!isManagedArea(area) || isInternalKey(key) || !isIsolated()) {
+                    return native.getItem.call(area, key);
+                }
+                return native.getItem.call(area, getScopedKey(key));
+            }
+
+            function setItem(area, key, value) {
+                area = unwrapArea(area);
+                key = normalizeKey(key);
+                if (!isManagedArea(area) || isInternalKey(key) || !isIsolated()) {
+                    native.setItem.call(area, key, String(value));
+                    return;
+                }
+                native.setItem.call(area, getScopedKey(key), String(value));
+            }
+
+            function removeItem(area, key) {
+                area = unwrapArea(area);
+                key = normalizeKey(key);
+                if (!isManagedArea(area) || isInternalKey(key) || !isIsolated()) {
+                    native.removeItem.call(area, key);
+                    return;
+                }
+                native.removeItem.call(area, getScopedKey(key));
+            }
+
+            function clearItems(area) {
+                area = unwrapArea(area);
+                if (!isManagedArea(area) || !isIsolated()) {
+                    native.clear.call(area);
+                    return;
+                }
+
+                var prefix = getStoragePrefix();
+                var keys = [];
+                var total = getNativeLength(area);
+                for (var i = 0; i < total; i++) {
+                    var storedKey = native.key.call(area, i);
+                    if (storedKey && storedKey.indexOf(prefix) === 0) {
+                        keys.push(storedKey);
+                    }
+                }
+                for (var j = 0; j < keys.length; j++) {
+                    native.removeItem.call(area, keys[j]);
+                }
+            }
+
+            function keyAt(area, index) {
+                area = unwrapArea(area);
+                if (!isManagedArea(area) || !isIsolated()) {
+                    return native.key.call(area, index);
+                }
+
+                var keys = getVisibleKeys(area);
+                return keys && index >= 0 && index < keys.length ? keys[index] : null;
+            }
+
+            function getLength(area) {
+                area = unwrapArea(area);
+                if (!isManagedArea(area) || !isIsolated()) {
+                    return getNativeLength(area);
+                }
+
+                var keys = getVisibleKeys(area);
+                return keys ? keys.length : 0;
+            }
+
+            function setProfile(nextProfile) {
+                profile = nextProfile ? String(nextProfile) : "";
+            }
+
+            function createStorageProxy(area) {
+                if (typeof Proxy !== "function" || !area) {
+                    return null;
+                }
+
+                function getRequiredTargetKeys(target) {
+                    var keys = Reflect.ownKeys(target);
+                    var required = [];
+                    for (var i = 0; i < keys.length; i++) {
+                        var descriptor = Object.getOwnPropertyDescriptor(target, keys[i]);
+                        if (descriptor && !descriptor.configurable) {
+                            required.push(keys[i]);
+                        }
+                    }
+                    return required;
+                }
+
+                return new Proxy(area, {
+                    get: function(target, prop) {
+                        if (prop === "getItem") return function(key) { return getItem(target, key); };
+                        if (prop === "setItem") return function(key, value) { return setItem(target, key, value); };
+                        if (prop === "removeItem") return function(key) { return removeItem(target, key); };
+                        if (prop === "clear") return function() { return clearItems(target); };
+                        if (prop === "key") return function(index) { return keyAt(target, index); };
+                        if (prop === "length") return getLength(target);
+                        if (prop === Symbol.toStringTag) return "Storage";
+                        if (typeof prop === "symbol") return target[prop];
+
+                        var key = normalizeKey(prop);
+                        if (prop in target && !getItem(target, key)) {
+                            var value = target[prop];
+                            return typeof value === "function" ? value.bind(target) : value;
+                        }
+                        return getItem(target, key);
+                    },
+                    set: function(target, prop, value) {
+                        if (typeof prop === "symbol") {
+                            target[prop] = value;
+                            return true;
+                        }
+                        setItem(target, prop, value);
+                        return true;
+                    },
+                    deleteProperty: function(target, prop) {
+                        var descriptor = Object.getOwnPropertyDescriptor(target, prop);
+                        if (descriptor && !descriptor.configurable) {
+                            return false;
+                        }
+                        if (typeof prop !== "symbol") {
+                            removeItem(target, prop);
+                        }
+                        return true;
+                    },
+                    has: function(target, prop) {
+                        if (prop in target) {
+                            return true;
+                        }
+                        return typeof prop !== "symbol" && getItem(target, prop) !== null;
+                    },
+                    ownKeys: function(target) {
+                        var keys = getVisibleKeys(target);
+                        if (!keys) {
+                            return Reflect.ownKeys(target);
+                        }
+
+                        var required = getRequiredTargetKeys(target);
+                        for (var i = 0; i < required.length; i++) {
+                            if (keys.indexOf(required[i]) === -1) {
+                                keys.push(required[i]);
+                            }
+                        }
+                        return keys;
+                    },
+                    getOwnPropertyDescriptor: function(target, prop) {
+                        var targetDescriptor = Object.getOwnPropertyDescriptor(target, prop);
+                        if (targetDescriptor && !targetDescriptor.configurable) {
+                            return targetDescriptor;
+                        }
+
+                        if (typeof prop === "symbol") {
+                            return targetDescriptor;
+                        }
+
+                        var value = getItem(target, prop);
+                        if (value !== null) {
+                            return {
+                                configurable: true,
+                                enumerable: true,
+                                value: value,
+                                writable: true
+                            };
+                        }
+                        return targetDescriptor;
+                    }
+                });
+            }
+
+            function installWindowProxy(name, area, proxy) {
+                if (!proxy) {
+                    return false;
+                }
+
+                try {
+                    Object.defineProperty(window, name, {
+                        configurable: true,
+                        enumerable: true,
+                        get: function() {
+                            return proxy;
+                        }
+                    });
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            }
+
+            localStorageProxy = createStorageProxy(nativeLocalStorage);
+            sessionStorageProxy = createStorageProxy(nativeSessionStorage);
+            installWindowProxy("localStorage", nativeLocalStorage, localStorageProxy);
+            installWindowProxy("sessionStorage", nativeSessionStorage, sessionStorageProxy);
+
+            storageProto.getItem = function(key) {
+                return getItem(this, key);
+            };
+            storageProto.setItem = function(key, value) {
+                setItem(this, key, value);
+            };
+            storageProto.removeItem = function(key) {
+                removeItem(this, key);
+            };
+            storageProto.clear = function() {
+                clearItems(this);
+            };
+            storageProto.key = function(index) {
+                return keyAt(this, index);
+            };
+
+            try {
+                Object.defineProperty(storageProto, "length", {
+                    configurable: true,
+                    get: function() {
+                        return getLength(this);
+                    }
+                });
+            } catch (e) {}
+
+            document.addEventListener(PROFILE_EVENT, function(event) {
+                setProfile(event && event.detail);
+            });
+
+            window.addEventListener("storage", function(event) {
+                if (redispatchingStorageEvent || !isIsolated() || !event.key) {
+                    return;
+                }
+
+                var key = normalizeKey(event.key);
+                var prefix = getStoragePrefix();
+                var isProfileStorageKey = key.indexOf(KEY_PREFIX) === 0;
+                if (!isProfileStorageKey && isInternalKey(key)) {
+                    return;
+                }
+
+                event.stopImmediatePropagation();
+                if (key.indexOf(prefix) !== 0) {
+                    return;
+                }
+
+                var rawKey = key.substring(prefix.length);
+                try {
+                    redispatchingStorageEvent = true;
+                    window.dispatchEvent(new StorageEvent("storage", {
+                        key: rawKey,
+                        oldValue: event.oldValue,
+                        newValue: event.newValue,
+                        url: event.url,
+                        storageArea: event.storageArea === nativeSessionStorage ?
+                            window.sessionStorage :
+                            window.localStorage
+                    }));
+                } catch (e) {
+                    window.dispatchEvent(new Event("storage"));
+                } finally {
+                    redispatchingStorageEvent = false;
+                }
+            }, true);
+        })()`;
+    var b = document.createElement("script");
+    b.appendChild(document.createTextNode(storageScript));
+    (document.head || document.documentElement).appendChild(b);
+    b.parentNode.removeChild(b);
+}
+function setStorageIsolationProfile(profileId) {
+    try {
+        document.dispatchEvent(new CustomEvent(STORAGE_PROFILE_EVENT, {
+            detail: profileId || ""
+        }));
+    } catch (e) {
+        debugLog('存储隔离环境更新失败:', e.message);
+    }
+}
+installStorageIsolation();
 connectProfilePort();
 r();
 
@@ -292,6 +691,9 @@ function r() {
 function p(a) {
     if (a !== null && a !== undefined) {
         a = String(a);
+        if (a === "undefined") {
+            return;
+        }
         debugLog('🔧 p()函数设置profile:', {
             传入值: a,
             类型: typeof a,
@@ -300,34 +702,100 @@ function p(a) {
         m = a;
         var markerIndex = m.indexOf("_@@@_");
         n = markerIndex >= 0 ? m.substr(0, markerIndex) : m;
+        profileResolved = true;
+        profileRequestInFlight = false;
+        emptyProfileRetryCount = 0;
         debugLog('🔧 设置结果:', {
             m: m,
             n: n
         });
-        ensureEnvironmentLabeling();
+        setStorageIsolationProfile(m);
+        flushPendingCookieWrites();
+        if (isTopFrame()) {
+            if (n) {
+                ensureEnvironmentLabeling();
+            } else {
+                removeEnvironmentIndicator();
+            }
+        }
     }
 }
-function t() {
-    if (null === m) {
-        // Send message to background script to handle cross-origin request
-        safeRuntimeSendMessage({
-            type: "10"
-        }, function(response, error) {
-            if (error) {
-                // Ignore error - connection might not be ready yet
-                return;
-            }
-            if (response && response.profile) {
+function handleEmptyProfileResponse() {
+    if (profileResolved) {
+        return;
+    }
+    if (emptyProfileRetryCount < MAX_EMPTY_PROFILE_RETRIES) {
+        emptyProfileRetryCount++;
+        setTimeout(requestProfile, EMPTY_PROFILE_RETRY_DELAY);
+        return;
+    }
+    p("");
+}
+function requestProfile() {
+    if (profileResolved || profileRequestInFlight) {
+        return;
+    }
+    profileRequestInFlight = true;
+    safeRuntimeSendMessage({
+        type: "10"
+    }, function(response, error) {
+        profileRequestInFlight = false;
+        if (error) {
+            return;
+        }
+        if (response && response.profile !== undefined && response.profile !== null) {
+            if (response.profile && response.profile !== "undefined") {
                 p(response.profile);
+            } else if (response.pending) {
+                handleEmptyProfileResponse();
+            } else {
+                p("");
             }
-        });
+        } else {
+            handleEmptyProfileResponse();
+        }
+    });
+}
+function t() {
+    if (!profileResolved) {
+        requestProfile();
+    }
+}
+function writeCookieForCurrentProfile(cookieValue) {
+    var value = String(cookieValue || "").trim();
+    document.cookie = m ? m + value : value;
+}
+function flushPendingCookieWrites() {
+    if (!profileResolved || !pendingCookieWrites.length) {
+        return;
+    }
+    while (pendingCookieWrites.length) {
+        writeCookieForCurrentProfile(pendingCookieWrites.shift());
+    }
+}
+function setCookieReadResult(value) {
+    try {
+        localStorage.setItem("@@@cookies", value);
+    } catch (v) {
+        var holder = document.getElementById("@@@cookies");
+        if (!holder) {
+            holder = document.createElement("div");
+            holder.setAttribute("id", "@@@cookies");
+            (document.documentElement || document).appendChild(holder);
+            holder.style.display = "none";
+        }
+        holder.innerText = value;
     }
 }
 document.addEventListener(7, function(a) {
     try {
         a = a.detail;
         t();
-        document.cookie = null === m ? a : m + a.trim()
+        if (!profileResolved) {
+            pendingCookieWrites.push(a);
+            return;
+        }
+        writeCookieForCurrentProfile(a);
     } catch (e) {
         debugLog('Cookie写入事件已忽略（扩展上下文可能已失效）:', e.message);
     }
@@ -335,6 +803,10 @@ document.addEventListener(7, function(a) {
 document.addEventListener(8, function() {
     try {
         t();
+        if (!profileResolved) {
+            setCookieReadResult("");
+            return;
+        }
         var a;
         var b = document.cookie;
         a = "";
@@ -355,11 +827,7 @@ document.addEventListener(8, function() {
                 a += m ? b[f].substring(m.length) : b[f]
             }
         }
-        try {
-            localStorage.setItem("@@@cookies", a)
-        } catch (v) {
-            document.getElementById("@@@cookies") || (f = document.createElement("div"), f.setAttribute("id", "@@@cookies"), document.documentElement.appendChild(f), f.style.display = "none"), document.getElementById("@@@cookies").a = a
-        }
+        setCookieReadResult(a);
     } catch (e) {
         debugLog('Cookie读取事件已忽略（扩展上下文可能已失效）:', e.message);
     }
@@ -1145,6 +1613,10 @@ window.addEventListener('error', function(event) {
 (function() {
     'use strict';
 
+    if (!isTopFrame()) {
+        return;
+    }
+
     debugLog('密码管理器已加载 - Chrome风格增强版');
 
     // 全局变量
@@ -1153,6 +1625,26 @@ window.addEventListener('error', function(event) {
     let activePasswordInput = null;
     let hasSelectedAccount = false;
     let cachedPasswords = [];
+    let cachedPasswordsUrl = "";
+    let passwordCacheWatcherInstalled = false;
+    const PM_COMPOSING_ATTR = 'data-pm-account-composing';
+    const PM_COMPOSITION_TEXT_ATTR = 'data-pm-account-composition-text';
+    const PM_COMPOSITION_PREFIX_ATTR = 'data-pm-account-composition-prefix';
+    const APPLE_DEVELOPER_SIGNIN_APP_ID_KEY = '891bd3417a7776362562d2197f89480a8547b108fd934911bcbea0110d07f757';
+    const APPLE_DEVELOPER_CACHE_KEY = 'apple-developer-signin:' + APPLE_DEVELOPER_SIGNIN_APP_ID_KEY;
+    const APPLE_DEVELOPER_LOOKUP_URLS = [
+        'https://idmsa.apple.com/IDMSWebAuth/signin',
+        'https://developer.apple.com/account/',
+        'https://appstoreconnect.apple.com/',
+        'https://appleid.apple.com/',
+        'https://account.apple.com/'
+    ];
+    const APPLE_DEVELOPER_PANEL_ID = 'pm-apple-developer-account-panel';
+    const APPLE_DEVELOPER_LOCAL_ACCOUNTS_FILE = 'apple-developer-accounts.local.json';
+    let appleDeveloperSelectedPassword = null;
+    let appleDeveloperLocalAccounts = null;
+    let appleDeveloperLocalAccountsLoading = false;
+    let appleDeveloperLocalAccountCallbacks = [];
 
     // 初始化
     let initDone = false;
@@ -1165,6 +1657,7 @@ window.addEventListener('error', function(event) {
         initDone = true;
 
         debugLog('初始化密码管理器...');
+        setupPasswordCacheInvalidation();
 
         // 检查自动填充设置
         safeStorageLocalGet(['pm_autoFill'], function(result, error) {
@@ -1179,6 +1672,62 @@ window.addEventListener('error', function(event) {
                 debugLog('ℹ️ 自动填充已禁用');
             }
         });
+    }
+
+    function resetPasswordCacheForUrl(url) {
+        cachedPasswords = [];
+        cachedPasswordsUrl = url || window.location.href;
+        preloadDone = false;
+        hasSelectedAccount = false;
+        appleDeveloperSelectedPassword = null;
+        removeExistingDropdown();
+    }
+
+    function getPasswordCacheKeyForCurrentPage() {
+        return isAppleDeveloperSignInPage() ? APPLE_DEVELOPER_CACHE_KEY : window.location.href;
+    }
+
+    function syncPasswordCacheWithCurrentUrl() {
+        const currentUrl = getPasswordCacheKeyForCurrentPage();
+        if (!cachedPasswordsUrl) {
+            cachedPasswordsUrl = currentUrl;
+            return currentUrl;
+        }
+
+        if (cachedPasswordsUrl !== currentUrl) {
+            debugLog('页面URL变化，清空密码建议缓存:', cachedPasswordsUrl, '→', currentUrl);
+            resetPasswordCacheForUrl(currentUrl);
+        }
+
+        return currentUrl;
+    }
+
+    function setupPasswordCacheInvalidation() {
+        if (passwordCacheWatcherInstalled) {
+            return;
+        }
+        passwordCacheWatcherInstalled = true;
+        cachedPasswordsUrl = window.location.href;
+
+        const scheduleUrlCheck = function() {
+            setTimeout(syncPasswordCacheWithCurrentUrl, 0);
+        };
+
+        ['pushState', 'replaceState'].forEach(function(methodName) {
+            const original = history[methodName];
+            if (typeof original !== 'function') {
+                return;
+            }
+            history[methodName] = function() {
+                const result = original.apply(this, arguments);
+                scheduleUrlCheck();
+                return result;
+            };
+        });
+
+        window.addEventListener('popstate', scheduleUrlCheck);
+        window.addEventListener('hashchange', scheduleUrlCheck);
+        window.addEventListener('pageshow', scheduleUrlCheck);
     }
 
     /**
@@ -1196,8 +1745,9 @@ window.addEventListener('error', function(event) {
         debugLog('🚀 开始设置自动填充功能');
 
         const runInitialAutoFillScan = function() {
+            const isAppleDeveloperPage = setupAppleDeveloperSignIn();
             const passwordInputCount = detectLoginForms();
-            if (passwordInputCount > 0) {
+            if (passwordInputCount > 0 || isAppleDeveloperPage) {
                 setTimeout(preloadPasswordData, 500);
                 observeNewElements();
             } else {
@@ -1282,6 +1832,11 @@ window.addEventListener('error', function(event) {
                             }
                         });
                     });
+
+                    if (isAppleDeveloperSignInPage()) {
+                        setupAppleDeveloperSignIn();
+                        fillAppleDeveloperPasswordIfReady();
+                    }
                 } finally {
                     // 重置标志
                     isObserving = false;
@@ -1393,6 +1948,18 @@ window.addEventListener('error', function(event) {
     function handleInputFocus(input) {
         debugLog('输入框获得焦点:', input.type, input.name);
 
+        if (isAppleDeveloperSignInPage()) {
+            setupAppleDeveloperSignIn();
+            if (isAppleDeveloperPasswordInput(input)) {
+                fillAppleDeveloperPasswordIfReady();
+                return;
+            }
+            if (isAppleDeveloperUsernameInput(input)) {
+                showPasswordSuggestions(input, findAppleDeveloperPasswordInput());
+                return;
+            }
+        }
+
         if (hasSelectedAccount) {
             debugLog('已选择账号，忽略焦点触发的下拉框显示');
             removeExistingDropdown();
@@ -1418,6 +1985,507 @@ window.addEventListener('error', function(event) {
                 showPasswordSuggestions(input, passwordInput);
             }
         }
+    }
+
+    function isAppleDeveloperSignInPage() {
+        try {
+            const url = new URL(window.location.href);
+            return url.protocol === 'https:' && url.hostname === 'idmsa.apple.com';
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function isAppleDeveloperUsernameInput(input) {
+        return !!input && (
+            input.id === 'account_name_text_field' ||
+            input.getAttribute('can-field') === 'accountName'
+        );
+    }
+
+    function isAppleDeveloperPasswordInput(input) {
+        return !!input && (
+            input.id === 'password_text_field' ||
+            input.getAttribute('can-field') === 'password'
+        );
+    }
+
+    function findAppleDeveloperUsernameInput() {
+        return document.getElementById('account_name_text_field') ||
+            document.querySelector('input[can-field="accountName"]');
+    }
+
+    function findAppleDeveloperPasswordInput() {
+        return document.getElementById('password_text_field') ||
+            document.querySelector('input[can-field="password"]') ||
+            document.querySelector('input[type="password"]');
+    }
+
+    function setupAppleDeveloperSignIn() {
+        if (!isAppleDeveloperSignInPage()) {
+            return false;
+        }
+
+        const usernameInput = findAppleDeveloperUsernameInput();
+        const passwordInput = findAppleDeveloperPasswordInput();
+        loadAppleDeveloperLocalAccounts(function(accounts) {
+            renderAppleDeveloperAccountPanel(cachedPasswords.length > 0 ? cachedPasswords : accounts);
+        });
+
+        if (usernameInput && !usernameInput.hasAttribute('data-pm-apple-developer-setup')) {
+            usernameInput.setAttribute('data-pm-apple-developer-setup', 'true');
+
+            const showAppleAccounts = function(forceReload) {
+                preloadAppleDeveloperPasswords();
+                showPasswordSuggestions(usernameInput, findAppleDeveloperPasswordInput(), !!forceReload);
+            };
+
+            usernameInput.addEventListener('focus', function() {
+                showAppleAccounts(false);
+            });
+
+            usernameInput.addEventListener('click', function() {
+                showAppleAccounts(false);
+            });
+
+            usernameInput.addEventListener('dblclick', function() {
+                hasSelectedAccount = false;
+                appleDeveloperSelectedPassword = null;
+                showAppleAccounts(true);
+            });
+
+            usernameInput.addEventListener('input', function() {
+                updateAppleDeveloperSelectedPasswordFromAccount(usernameInput.value);
+            });
+
+            usernameInput.addEventListener('change', function() {
+                updateAppleDeveloperSelectedPasswordFromAccount(usernameInput.value);
+            });
+        }
+
+        if (passwordInput && !passwordInput.hasAttribute('data-pm-apple-developer-password-setup')) {
+            passwordInput.setAttribute('data-pm-apple-developer-password-setup', 'true');
+            passwordInput.addEventListener('focus', fillAppleDeveloperPasswordIfReady);
+        }
+
+        preloadAppleDeveloperPasswords();
+        updateAppleDeveloperSelectedPasswordFromAccount(usernameInput ? usernameInput.value : '');
+        fillAppleDeveloperPasswordIfReady();
+        return true;
+    }
+
+    function preloadAppleDeveloperPasswords() {
+        loadAppleDeveloperPasswords(false, function() {});
+    }
+
+    function showAppleDeveloperAccountSuggestions(usernameInput, passwordInput, forceReload) {
+        removeExistingDropdown();
+
+        const targetInput = usernameInput || findAppleDeveloperUsernameInput() || passwordInput;
+        const targetPasswordInput = passwordInput || findAppleDeveloperPasswordInput();
+
+        loadAppleDeveloperPasswords(!!forceReload, function(passwords) {
+            if (passwords.length > 0) {
+                renderDropdown(targetInput, targetPasswordInput, passwords);
+            } else {
+                renderNoPasswordsDropdown(targetInput || targetPasswordInput);
+            }
+        });
+    }
+
+    function loadAppleDeveloperPasswords(forceReload, callback) {
+        if (preloadDone && cachedPasswordsUrl === APPLE_DEVELOPER_CACHE_KEY && !forceReload) {
+            callback(cachedPasswords);
+            return;
+        }
+
+        preloadDone = true;
+        loadAppleDeveloperLocalAccounts(function(localAccounts) {
+            let pendingCount = APPLE_DEVELOPER_LOOKUP_URLS.length;
+            let foundPasswords = localAccounts.slice();
+
+            function finishAppleDeveloperPasswordLoad() {
+                cachedPasswords = dedupeAndSortPasswords(foundPasswords);
+                cachedPasswordsUrl = APPLE_DEVELOPER_CACHE_KEY;
+                renderAppleDeveloperAccountPanel(cachedPasswords);
+                const usernameInput = findAppleDeveloperUsernameInput();
+                if (usernameInput && usernameInput.value) {
+                    updateAppleDeveloperSelectedPasswordFromAccount(usernameInput.value);
+                    fillAppleDeveloperPasswordIfReady();
+                }
+                debugLog('Apple开发者账号缓存完成:', cachedPasswords.length, '个');
+                callback(cachedPasswords);
+            }
+
+            APPLE_DEVELOPER_LOOKUP_URLS.forEach(function(url) {
+                safeRuntimeSendMessage({
+                    action: 'findPasswords',
+                    url: url
+                }, function(response, error) {
+                    pendingCount--;
+                    if (!error && response && response.success && response.passwords) {
+                        foundPasswords = foundPasswords.concat(response.passwords);
+                    } else if (error) {
+                        debugLog('Apple开发者账号读取失败:', error.message || error);
+                    }
+
+                    if (pendingCount === 0) {
+                        finishAppleDeveloperPasswordLoad();
+                    }
+                });
+            });
+
+            if (APPLE_DEVELOPER_LOOKUP_URLS.length === 0) {
+                finishAppleDeveloperPasswordLoad();
+            }
+        });
+    }
+
+    function loadAppleDeveloperLocalAccounts(callback) {
+        if (appleDeveloperLocalAccounts) {
+            callback(appleDeveloperLocalAccounts);
+            return;
+        }
+
+        appleDeveloperLocalAccountCallbacks.push(callback);
+        if (appleDeveloperLocalAccountsLoading) {
+            return;
+        }
+
+        appleDeveloperLocalAccountsLoading = true;
+
+        const finish = function(accounts) {
+            appleDeveloperLocalAccounts = accounts || [];
+            appleDeveloperLocalAccountsLoading = false;
+
+            const callbacks = appleDeveloperLocalAccountCallbacks.slice();
+            appleDeveloperLocalAccountCallbacks = [];
+            callbacks.forEach(function(done) {
+                done(appleDeveloperLocalAccounts);
+            });
+        };
+
+        if (!isExtensionContextReady() || !chrome.runtime || !chrome.runtime.getURL || typeof fetch !== 'function') {
+            finish([]);
+            return;
+        }
+
+        fetch(chrome.runtime.getURL(APPLE_DEVELOPER_LOCAL_ACCOUNTS_FILE), {
+            cache: 'no-store'
+        }).then(function(response) {
+            if (!response || !response.ok) {
+                return [];
+            }
+            return response.json();
+        }).then(function(data) {
+            const rawAccounts = Array.isArray(data) ? data : data && data.accounts;
+            finish(normalizeAppleDeveloperLocalAccounts(rawAccounts));
+        }).catch(function(error) {
+            debugLog('Apple本地账号配置未加载:', error && (error.message || error));
+            finish([]);
+        });
+    }
+
+    function normalizeAppleDeveloperLocalAccounts(accounts) {
+        if (!Array.isArray(accounts)) {
+            return [];
+        }
+
+        return accounts.map(function(account, index) {
+            return {
+                name: account.name || 'Apple Developer',
+                url: account.url || 'https://developer.apple.com/account/',
+                username: account.username || account.email || account.account || '',
+                password: account.password || '',
+                lastUsed: account.lastUsed || (9000000000000 - index)
+            };
+        }).filter(function(account) {
+            return account.username && account.password;
+        });
+    }
+
+    function dedupeAndSortPasswords(passwords) {
+        const sorted = (passwords || []).slice().sort(function(a, b) {
+            return (b.lastUsed || 0) - (a.lastUsed || 0);
+        });
+        const seen = {};
+        const result = [];
+
+        sorted.forEach(function(pwd) {
+            const key = normalizeAccountSearchTerm(pwd && pwd.username);
+            if (!key || seen[key] || !pwd.password) {
+                return;
+            }
+            seen[key] = true;
+            result.push(pwd);
+        });
+
+        return result;
+    }
+
+    function renderAppleDeveloperAccountPanel(passwords) {
+        if (!isAppleDeveloperSignInPage() || !document.body) {
+            return;
+        }
+
+        const accountList = dedupeAndSortPasswords(
+            passwords && passwords.length > 0 ? passwords : []
+        );
+        let panel = document.getElementById(APPLE_DEVELOPER_PANEL_ID);
+
+        if (!panel) {
+            panel = document.createElement('div');
+            panel.id = APPLE_DEVELOPER_PANEL_ID;
+            panel.style.cssText = `
+                position: fixed;
+                top: 92px;
+                right: 18px;
+                width: 360px;
+                max-height: calc(100vh - 116px);
+                overflow-y: auto;
+                z-index: 2147483647;
+                background: #ffffff;
+                border: 1px solid #d2d2d7;
+                border-radius: 8px;
+                box-shadow: 0 8px 28px rgba(0,0,0,0.18);
+                color: #1d1d1f;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+                font-size: 12px;
+                padding: 10px;
+                box-sizing: border-box;
+            `;
+            document.body.appendChild(panel);
+        }
+
+        panel.innerHTML = '';
+
+        const header = document.createElement('div');
+        header.style.cssText = `
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        `;
+
+        const title = document.createElement('span');
+        title.textContent = 'Apple 账号密码';
+        header.appendChild(title);
+
+        const closeButton = document.createElement('button');
+        closeButton.type = 'button';
+        closeButton.textContent = '隐藏';
+        closeButton.style.cssText = `
+            border: 1px solid #c7c7cc;
+            background: #f5f5f7;
+            color: #1d1d1f;
+            border-radius: 6px;
+            padding: 4px 8px;
+            cursor: pointer;
+            font-size: 12px;
+        `;
+        closeButton.addEventListener('click', function() {
+            panel.remove();
+        });
+        header.appendChild(closeButton);
+        panel.appendChild(header);
+
+        if (accountList.length === 0) {
+            const empty = document.createElement('div');
+            empty.textContent = '未找到本地账号配置';
+            empty.style.cssText = `
+                padding: 10px 0 2px;
+                color: #6e6e73;
+                line-height: 1.5;
+            `;
+            panel.appendChild(empty);
+            return;
+        }
+
+        accountList.forEach(function(pwd, index) {
+            const item = document.createElement('div');
+            item.style.cssText = `
+                border-top: ${index === 0 ? '0' : '1px solid #ececf1'};
+                padding: ${index === 0 ? '0 0 9px' : '9px 0'};
+            `;
+
+            item.appendChild(createAppleDeveloperCopyRow('账号', pwd.username));
+            item.appendChild(createAppleDeveloperCopyRow('密码', pwd.password));
+            panel.appendChild(item);
+        });
+    }
+
+    function createAppleDeveloperCopyRow(label, value) {
+        const row = document.createElement('div');
+        row.style.cssText = `
+            display: grid;
+            grid-template-columns: 34px minmax(0, 1fr) 48px;
+            gap: 6px;
+            align-items: center;
+            margin-top: 6px;
+        `;
+
+        const labelElement = document.createElement('span');
+        labelElement.textContent = label;
+        labelElement.style.cssText = 'color: #6e6e73;';
+        row.appendChild(labelElement);
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.readOnly = true;
+        input.value = value || '';
+        input.style.cssText = `
+            width: 100%;
+            min-width: 0;
+            box-sizing: border-box;
+            border: 1px solid #d2d2d7;
+            border-radius: 6px;
+            padding: 5px 7px;
+            color: #1d1d1f;
+            background: #fbfbfd;
+            font-size: 12px;
+        `;
+        input.addEventListener('focus', function() {
+            input.select();
+        });
+        input.addEventListener('click', function() {
+            input.select();
+        });
+        row.appendChild(input);
+
+        const copyButton = document.createElement('button');
+        copyButton.type = 'button';
+        copyButton.textContent = '复制';
+        copyButton.style.cssText = `
+            border: 1px solid #0071e3;
+            background: #0071e3;
+            color: #fff;
+            border-radius: 6px;
+            padding: 5px 0;
+            cursor: pointer;
+            font-size: 12px;
+        `;
+        copyButton.addEventListener('click', function() {
+            copyAppleDeveloperText(value || '', copyButton);
+        });
+        row.appendChild(copyButton);
+
+        return row;
+    }
+
+    function copyAppleDeveloperText(text, button) {
+        const resetButton = function(label) {
+            if (!button) return;
+            button.textContent = label;
+            setTimeout(function() {
+                button.textContent = '复制';
+            }, 900);
+        };
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() {
+                resetButton('已复制');
+            }).catch(function() {
+                fallbackCopyAppleDeveloperText(text);
+                resetButton('已复制');
+            });
+            return;
+        }
+
+        fallbackCopyAppleDeveloperText(text);
+        resetButton('已复制');
+    }
+
+    function fallbackCopyAppleDeveloperText(text) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.cssText = 'position: fixed; left: -9999px; top: -9999px;';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        try {
+            document.execCommand('copy');
+        } catch (e) {}
+        textarea.remove();
+    }
+
+    function updateAppleDeveloperSelectedPasswordFromAccount(accountValue) {
+        if (!isAppleDeveloperSignInPage()) {
+            return null;
+        }
+
+        const account = normalizeAccountSearchTerm(accountValue);
+        const currentSelectedAccount = normalizeAccountSearchTerm(
+            appleDeveloperSelectedPassword && appleDeveloperSelectedPassword.username
+        );
+
+        if (appleDeveloperSelectedPassword && account && account === currentSelectedAccount) {
+            return appleDeveloperSelectedPassword;
+        }
+
+        if (!account) {
+            appleDeveloperSelectedPassword = null;
+            hasSelectedAccount = false;
+            return null;
+        }
+
+        const match = cachedPasswords.find(function(pwd) {
+            return normalizeAccountSearchTerm(pwd.username) === account;
+        }) || null;
+
+        if (match) {
+            appleDeveloperSelectedPassword = match;
+            hasSelectedAccount = true;
+        } else if (appleDeveloperSelectedPassword) {
+            appleDeveloperSelectedPassword = null;
+            hasSelectedAccount = false;
+        }
+
+        return appleDeveloperSelectedPassword;
+    }
+
+    function fillAppleDeveloperPasswordIfReady() {
+        if (!isAppleDeveloperSignInPage()) {
+            return false;
+        }
+
+        const passwordInput = findAppleDeveloperPasswordInput();
+        if (!passwordInput) {
+            return false;
+        }
+
+        let passwordData = appleDeveloperSelectedPassword;
+        const usernameInput = findAppleDeveloperUsernameInput();
+        if (!passwordData && usernameInput) {
+            passwordData = updateAppleDeveloperSelectedPasswordFromAccount(usernameInput.value);
+        }
+
+        if (!passwordData || !passwordData.password) {
+            return false;
+        }
+
+        if (
+            usernameInput &&
+            usernameInput.value &&
+            normalizeAccountSearchTerm(usernameInput.value) !== normalizeAccountSearchTerm(passwordData.username)
+        ) {
+            return false;
+        }
+
+        setTimeout(function() {
+            if (!document.body || !document.body.contains(passwordInput)) {
+                return;
+            }
+            setInputValue(passwordInput, passwordData.password);
+            passwordInput.focus();
+            setTimeout(function() {
+                passwordInput.dispatchEvent(new Event('blur', {bubbles: true}));
+            }, 100);
+            debugLog('Apple开发者账号密码已填充:', passwordData.username);
+        }, 100);
+
+        return true;
     }
 
     /**
@@ -1606,18 +2674,102 @@ window.addEventListener('error', function(event) {
         return null;
     }
 
+    function normalizeAccountSearchTerm(value) {
+        return String(value || '').toLowerCase().trim();
+    }
+
+    function addUniqueSearchTerm(terms, value) {
+        const term = normalizeAccountSearchTerm(value);
+        if (term && !terms.includes(term)) {
+            terms.push(term);
+        }
+
+        const compactImeTerm = term.replace(/['’`]/g, '');
+        if (compactImeTerm && compactImeTerm !== term && !terms.includes(compactImeTerm)) {
+            terms.push(compactImeTerm);
+        }
+    }
+
+    function isAccountInputComposing(input) {
+        return !!input && input.getAttribute(PM_COMPOSING_ATTR) === 'true';
+    }
+
+    function setAccountCompositionState(input, isComposing, text, prefix) {
+        if (!input) return;
+
+        if (isComposing) {
+            input.setAttribute(PM_COMPOSING_ATTR, 'true');
+            input.setAttribute(PM_COMPOSITION_TEXT_ATTR, text || '');
+            input.setAttribute(PM_COMPOSITION_PREFIX_ATTR, prefix || '');
+        } else {
+            input.removeAttribute(PM_COMPOSING_ATTR);
+            input.removeAttribute(PM_COMPOSITION_TEXT_ATTR);
+            input.removeAttribute(PM_COMPOSITION_PREFIX_ATTR);
+        }
+    }
+
+    function getAccountSearchTerms(usernameInput) {
+        const terms = [];
+        if (!usernameInput) {
+            return terms;
+        }
+
+        const inputTerm = normalizeAccountSearchTerm(usernameInput.value);
+        const isComposing = isAccountInputComposing(usernameInput);
+        const compositionTerm = normalizeAccountSearchTerm(
+            usernameInput.getAttribute(PM_COMPOSITION_TEXT_ATTR)
+        );
+        const compositionPrefix = normalizeAccountSearchTerm(
+            usernameInput.getAttribute(PM_COMPOSITION_PREFIX_ATTR)
+        );
+
+        if (isComposing && compositionTerm) {
+            if (inputTerm && inputTerm.includes(compositionTerm)) {
+                addUniqueSearchTerm(terms, inputTerm);
+            }
+            addUniqueSearchTerm(terms, compositionPrefix + compositionTerm);
+            addUniqueSearchTerm(terms, inputTerm);
+            addUniqueSearchTerm(terms, compositionTerm);
+            return terms;
+        }
+
+        addUniqueSearchTerm(terms, inputTerm);
+        return terms;
+    }
+
+    function passwordMatchesAccountSearch(pwd, searchTerms) {
+        if (!searchTerms || searchTerms.length === 0) {
+            return true;
+        }
+
+        const username = normalizeAccountSearchTerm(pwd && pwd.username);
+        return searchTerms.some(function(term) {
+            return username.includes(term);
+        });
+    }
+
     /**
      * 显示密码建议下拉框
      */
     function showPasswordSuggestions(usernameInput, passwordInput, forceReload = false) {
+        if (isAppleDeveloperSignInPage()) {
+            showAppleDeveloperAccountSuggestions(
+                isAppleDeveloperUsernameInput(usernameInput) ? usernameInput : findAppleDeveloperUsernameInput(),
+                passwordInput || findAppleDeveloperPasswordInput(),
+                forceReload
+            );
+            return;
+        }
+
         removeExistingDropdown();
+        const currentUrl = syncPasswordCacheWithCurrentUrl();
 
         if (hasSelectedAccount && !forceReload) {
             debugLog('已选择账号，禁止自动重新显示账号列表');
             return;
         }
 
-        if (cachedPasswords.length > 0 && !forceReload) {
+        if (cachedPasswords.length > 0 && cachedPasswordsUrl === currentUrl && !forceReload) {
             debugLog('📦 使用缓存的密码数据:', cachedPasswords.length, '个');
             if (cachedPasswords.length > 0) {
                 renderDropdown(usernameInput, passwordInput, cachedPasswords);
@@ -1627,7 +2779,6 @@ window.addEventListener('error', function(event) {
             return;
         }
 
-        const currentUrl = window.location.href;
         debugLog('🔍 查找密码建议:', currentUrl);
 
         safeRuntimeSendMessage({
@@ -1649,6 +2800,7 @@ window.addEventListener('error', function(event) {
 
             if (response && response.success && response.passwords) {
                 cachedPasswords = response.passwords;
+                cachedPasswordsUrl = currentUrl;
                 debugLog('💾 已缓存密码数据:', cachedPasswords.length, '个');
 
                 if (cachedPasswords.length > 0) {
@@ -1771,9 +2923,9 @@ window.addEventListener('error', function(event) {
             item.dataset.index = index;
 
             const domain = extractDomain(pwd.url);
-            const searchTerm = usernameInput ? usernameInput.value.toLowerCase().trim() : '';
-            const displayUsername = highlightMatch(pwd.username, searchTerm);
-            const displayDomain = highlightMatch(domain, searchTerm);
+            const searchTerms = getAccountSearchTerms(usernameInput);
+            const displayUsername = highlightBestMatch(pwd.username, searchTerms);
+            const displayDomain = highlightBestMatch(domain, searchTerms);
 
             if (index === selectedIndex) {
                 item.style.cssText = `
@@ -1856,6 +3008,22 @@ window.addEventListener('error', function(event) {
                escapeHtml(after);
     }
 
+    function highlightBestMatch(text, searchTerms) {
+        const normalizedText = normalizeAccountSearchTerm(text);
+
+        if (searchTerms && searchTerms.length > 0) {
+            for (const term of searchTerms) {
+                if (normalizedText.includes(term)) {
+                    return highlightMatch(text, term);
+                }
+            }
+
+            return highlightMatch(text, searchTerms[0]);
+        }
+
+        return escapeHtml(text);
+    }
+
     /**
      * 更新选中项
      */
@@ -1880,6 +3048,7 @@ window.addEventListener('error', function(event) {
     function setupKeyboardNavigation(usernameInput, passwordInput, passwords) {
         const keyHandler = function(e) {
             if (!currentDropdown) return;
+            if (e.isComposing || e.keyCode === 229 || isAccountInputComposing(usernameInput)) return;
 
             switch(e.key) {
                 case 'ArrowDown':
@@ -1924,8 +3093,20 @@ window.addEventListener('error', function(event) {
     function setupInputFilter(usernameInput, passwordInput) {
         if (window.pmFilterInput && window.pmFilterHandler) {
             window.pmFilterInput.removeEventListener('input', window.pmFilterHandler);
+            if (window.pmCompositionStartHandler) {
+                window.pmFilterInput.removeEventListener('compositionstart', window.pmCompositionStartHandler);
+            }
+            if (window.pmCompositionUpdateHandler) {
+                window.pmFilterInput.removeEventListener('compositionupdate', window.pmCompositionUpdateHandler);
+            }
+            if (window.pmCompositionEndHandler) {
+                window.pmFilterInput.removeEventListener('compositionend', window.pmCompositionEndHandler);
+            }
             window.pmFilterInput = null;
             window.pmFilterHandler = null;
+            window.pmCompositionStartHandler = null;
+            window.pmCompositionUpdateHandler = null;
+            window.pmCompositionEndHandler = null;
         }
 
         if (!usernameInput) {
@@ -1933,6 +3114,7 @@ window.addEventListener('error', function(event) {
         }
 
         let debounceTimer;
+        let compositionPrefix = usernameInput.value || '';
 
         const filterHandler = function(e) {
             if (hasSelectedAccount) {
@@ -1940,7 +3122,9 @@ window.addEventListener('error', function(event) {
                 return;
             }
 
-            if (!usernameInput.value.trim()) {
+            const searchTerms = getAccountSearchTerms(usernameInput);
+
+            if (!usernameInput.value.trim() && searchTerms.length === 0) {
                 debugLog('🔄 输入框已清空，重置选择状态');
                 hasSelectedAccount = false;
             }
@@ -1956,16 +3140,16 @@ window.addEventListener('error', function(event) {
                     return;
                 }
 
-                const searchTerm = usernameInput.value.toLowerCase().trim();
-                debugLog('🔍 过滤账号:', searchTerm);
+                const currentSearchTerms = getAccountSearchTerms(usernameInput);
+                debugLog('🔍 过滤账号:', currentSearchTerms[0] || '');
 
                 if (cachedPasswords.length > 0) {
-                    if (!searchTerm) {
+                    if (currentSearchTerms.length === 0) {
                         debugLog('📋 显示所有账号:', cachedPasswords.length);
                         renderDropdown(usernameInput, passwordInput, cachedPasswords, 0);
                     } else {
                         const filtered = cachedPasswords.filter(function(pwd) {
-                            return pwd.username.toLowerCase().includes(searchTerm);
+                            return passwordMatchesAccountSearch(pwd, currentSearchTerms);
                         });
 
                         debugLog('📋 过滤后账号数:', filtered.length);
@@ -1983,16 +3167,40 @@ window.addEventListener('error', function(event) {
             }, 80);
         };
 
+        const compositionStartHandler = function() {
+            compositionPrefix = usernameInput.value || '';
+            setAccountCompositionState(usernameInput, true, '', compositionPrefix);
+        };
+
+        const compositionUpdateHandler = function(e) {
+            setAccountCompositionState(usernameInput, true, e.data || '', compositionPrefix);
+            filterHandler(e);
+        };
+
+        const compositionEndHandler = function(e) {
+            compositionPrefix = usernameInput.value || '';
+            setAccountCompositionState(usernameInput, false);
+            filterHandler(e);
+        };
+
         usernameInput.addEventListener('input', filterHandler);
+        usernameInput.addEventListener('compositionstart', compositionStartHandler);
+        usernameInput.addEventListener('compositionupdate', compositionUpdateHandler);
+        usernameInput.addEventListener('compositionend', compositionEndHandler);
         window.pmFilterHandler = filterHandler;
         window.pmFilterInput = usernameInput;
+        window.pmCompositionStartHandler = compositionStartHandler;
+        window.pmCompositionUpdateHandler = compositionUpdateHandler;
+        window.pmCompositionEndHandler = compositionEndHandler;
     }
 
     /**
      * 渲染无结果提示
      */
     function renderNoResultsDropdown(usernameInput) {
-        removeExistingDropdown();
+        removeExistingDropdown({
+            keepInputFilter: true
+        });
 
         const dropdown = document.createElement('div');
         dropdown.id = 'pm-password-dropdown';
@@ -2080,8 +3288,10 @@ window.addEventListener('error', function(event) {
     /**
      * 移除已存在的下拉框
      */
-    function removeExistingDropdown() {
+    function removeExistingDropdown(options) {
+        const keepInputFilter = !!(options && options.keepInputFilter);
         const existing = document.getElementById('pm-password-dropdown');
+        const filterInput = window.pmFilterInput;
         if (existing) {
             existing.remove();
         }
@@ -2093,34 +3303,79 @@ window.addEventListener('error', function(event) {
             window.pmKeyHandler = null;
         }
 
-        if (window.pmFilterInput && window.pmFilterHandler) {
+        if (!keepInputFilter && window.pmFilterInput && window.pmFilterHandler) {
             window.pmFilterInput.removeEventListener('input', window.pmFilterHandler);
+            if (window.pmCompositionStartHandler) {
+                window.pmFilterInput.removeEventListener('compositionstart', window.pmCompositionStartHandler);
+            }
+            if (window.pmCompositionUpdateHandler) {
+                window.pmFilterInput.removeEventListener('compositionupdate', window.pmCompositionUpdateHandler);
+            }
+            if (window.pmCompositionEndHandler) {
+                window.pmFilterInput.removeEventListener('compositionend', window.pmCompositionEndHandler);
+            }
+        }
+
+        if (!keepInputFilter && filterInput && document.activeElement !== filterInput) {
+            setAccountCompositionState(filterInput, false);
         }
 
         window.pmDropdownItems = null;
         window.pmSelectedIndex = null;
-        window.pmFilterHandler = null;
-        window.pmFilterInput = null;
+        if (!keepInputFilter) {
+            window.pmFilterHandler = null;
+            window.pmFilterInput = null;
+            window.pmCompositionStartHandler = null;
+            window.pmCompositionUpdateHandler = null;
+            window.pmCompositionEndHandler = null;
+        }
     }
 
     /**
      * 填充凭据
      */
+    function setInputValue(input, value) {
+        if (!input) {
+            return false;
+        }
+
+        const nextValue = value === null || value === undefined ? '' : String(value);
+        if (input.value === nextValue) {
+            return false;
+        }
+
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+        if (descriptor && descriptor.set) {
+            descriptor.set.call(input, nextValue);
+        } else {
+            input.value = nextValue;
+        }
+
+        input.dispatchEvent(new Event('input', {bubbles: true}));
+        input.dispatchEvent(new Event('change', {bubbles: true}));
+        return true;
+    }
+
     function fillCredentials(usernameInput, passwordInput, passwordData) {
         debugLog('填充凭据:', passwordData.username);
 
         hasSelectedAccount = true;
+        if (isAppleDeveloperSignInPage()) {
+            appleDeveloperSelectedPassword = passwordData;
+        }
 
         if (usernameInput) {
-            usernameInput.value = passwordData.username;
-            usernameInput.dispatchEvent(new Event('input', {bubbles: true}));
-            usernameInput.dispatchEvent(new Event('change', {bubbles: true}));
+            setInputValue(usernameInput, passwordData.username);
+        }
+
+        if (!passwordInput) {
+            fillAppleDeveloperPasswordIfReady();
+            debugLog('仅填充账号，等待密码输入框出现');
+            return;
         }
 
         setTimeout(function() {
-            passwordInput.value = passwordData.password;
-            passwordInput.dispatchEvent(new Event('input', {bubbles: true}));
-            passwordInput.dispatchEvent(new Event('change', {bubbles: true}));
+            setInputValue(passwordInput, passwordData.password);
 
             passwordInput.focus();
 
@@ -2149,14 +3404,20 @@ window.addEventListener('error', function(event) {
      */
     let preloadDone = false;
     function preloadPasswordData() {
+        if (isAppleDeveloperSignInPage()) {
+            preloadAppleDeveloperPasswords();
+            return;
+        }
+
+        const currentUrl = syncPasswordCacheWithCurrentUrl();
+
         // 防止重复预加载
-        if (preloadDone) {
+        if (preloadDone && cachedPasswordsUrl === currentUrl) {
             debugLog('⚠️ 密码数据已预加载，跳过重复预加载');
             return;
         }
         preloadDone = true;
 
-        const currentUrl = window.location.href;
         debugLog('⚡ 预加载密码数据...');
 
         safeRuntimeSendMessage({
@@ -2171,9 +3432,11 @@ window.addEventListener('error', function(event) {
 
             if (response && response.success && response.passwords) {
                 cachedPasswords = response.passwords;
+                cachedPasswordsUrl = currentUrl;
                 debugLog('💾 预加载完成，缓存', cachedPasswords.length, '个密码');
             } else {
                 cachedPasswords = [];
+                cachedPasswordsUrl = currentUrl;
                 debugLog('💾 预加载完成，无密码数据');
             }
         });
