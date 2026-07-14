@@ -118,7 +118,7 @@
     function setupEventListeners() {
         // 搜索功能
         const searchInput = document.getElementById('search-input');
-        searchInput.addEventListener('input', handleSearch);
+        setupSearchInput(searchInput);
 
         // 导入功能
         document.getElementById('import-btn').addEventListener('click', handleImport);
@@ -389,13 +389,92 @@
     /**
      * 处理搜索
      */
+    function normalizeSearchTerm(value) {
+        return String(value || '').toLowerCase().trim();
+    }
+
+    function addUniqueSearchTerm(terms, value) {
+        const term = normalizeSearchTerm(value);
+        if (term && !terms.includes(term)) {
+            terms.push(term);
+        }
+    }
+
+    function getSearchTerms(searchInput) {
+        const terms = [];
+        const inputTerm = normalizeSearchTerm(searchInput.value);
+        const isComposing = searchInput.getAttribute('data-pm-search-composing') === 'true';
+        const compositionTerm = normalizeSearchTerm(searchInput.getAttribute('data-pm-search-composition-text'));
+        const compositionPrefix = normalizeSearchTerm(searchInput.getAttribute('data-pm-search-composition-prefix'));
+
+        if (isComposing && compositionTerm) {
+            if (inputTerm && inputTerm.includes(compositionTerm)) {
+                addUniqueSearchTerm(terms, inputTerm);
+            }
+            addUniqueSearchTerm(terms, compositionPrefix + compositionTerm);
+            addUniqueSearchTerm(terms, inputTerm);
+            addUniqueSearchTerm(terms, compositionTerm);
+            return terms;
+        }
+
+        addUniqueSearchTerm(terms, inputTerm);
+        return terms;
+    }
+
+    function passwordMatchesSearchTerms(pwd, searchTerms) {
+        if (!searchTerms || searchTerms.length === 0) {
+            return true;
+        }
+
+        const fields = [
+            normalizeSearchTerm(pwd && pwd.name),
+            normalizeSearchTerm(pwd && pwd.url),
+            normalizeSearchTerm(pwd && pwd.username)
+        ];
+
+        return searchTerms.some(term => fields.some(field => field.includes(term)));
+    }
+
+    function setSearchCompositionState(searchInput, isComposing, text, prefix) {
+        if (isComposing) {
+            searchInput.setAttribute('data-pm-search-composing', 'true');
+            searchInput.setAttribute('data-pm-search-composition-text', text || '');
+            searchInput.setAttribute('data-pm-search-composition-prefix', prefix || '');
+        } else {
+            searchInput.removeAttribute('data-pm-search-composing');
+            searchInput.removeAttribute('data-pm-search-composition-text');
+            searchInput.removeAttribute('data-pm-search-composition-prefix');
+        }
+    }
+
+    function setupSearchInput(searchInput) {
+        if (!searchInput) {
+            return;
+        }
+
+        let compositionPrefix = searchInput.value || '';
+
+        searchInput.addEventListener('input', handleSearch);
+        searchInput.addEventListener('compositionstart', function() {
+            compositionPrefix = searchInput.value || '';
+            setSearchCompositionState(searchInput, true, '', compositionPrefix);
+        });
+        searchInput.addEventListener('compositionupdate', function(e) {
+            setSearchCompositionState(searchInput, true, e.data || '', compositionPrefix);
+            handleSearch.call(searchInput);
+        });
+        searchInput.addEventListener('compositionend', function() {
+            compositionPrefix = searchInput.value || '';
+            setSearchCompositionState(searchInput, false);
+            handleSearch.call(searchInput);
+        });
+    }
+
     function handleSearch() {
-        const searchTerm = this.value.toLowerCase();
+        const searchTerms = getSearchTerms(this);
 
         filteredPasswords = allPasswords.filter(pwd =>
-            (pwd.name && pwd.name.toLowerCase().includes(searchTerm)) ||
-            (pwd.url && pwd.url.toLowerCase().includes(searchTerm)) ||
-            (pwd.username && pwd.username.toLowerCase().includes(searchTerm))
+            passwordMatchesSearchTerms(pwd, searchTerms)
         );
 
         displayPasswords(filteredPasswords);

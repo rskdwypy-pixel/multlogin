@@ -66,11 +66,41 @@ function clearProfileColor(profileId) {
     }
 }
 
+function markPendingNewIdentityUrl(url) {
+    if (!url) {
+        return;
+    }
+    pendingNewIdentityUrls[url] = (pendingNewIdentityUrls[url] || 0) + 1;
+}
+
+function consumePendingNewIdentityUrl(url) {
+    if (!url || !pendingNewIdentityUrls[url]) {
+        return false;
+    }
+    pendingNewIdentityUrls[url]--;
+    if (pendingNewIdentityUrls[url] <= 0) {
+        delete pendingNewIdentityUrls[url];
+    }
+    return true;
+}
+
+function releasePendingNewIdentityUrl(url) {
+    if (!url || !pendingNewIdentityUrls[url]) {
+        return;
+    }
+    pendingNewIdentityUrls[url]--;
+    if (pendingNewIdentityUrls[url] <= 0) {
+        delete pendingNewIdentityUrls[url];
+    }
+}
+
 var f = {};
 /** @type {Array} */
 var g = [];
 /** @type {Array} */
 var l = [];
+var pendingNewIdentityUrls = {};
+var pendingIdentityTabs = {};
 m("");
 chrome.browserAction.onClicked.addListener(function () {
     n++;
@@ -252,6 +282,7 @@ chrome.tabs.onReplaced.addListener(function (f, n) {
     var c = A(n);
     p(f, c);
     delete g[n];
+    delete pendingIdentityTabs[n];
     B(f, c);
 });
 chrome.tabs.onRemoved.addListener(function (n) {
@@ -275,6 +306,7 @@ chrome.tabs.onRemoved.addListener(function (n) {
         }
     }
     delete l[n];
+    delete pendingIdentityTabs[n];
 });
 chrome.tabs.onUpdated.addListener(function (i, dataAndEvents, jqXHR) {
     if ("loading" == jqXHR.status) {
@@ -285,27 +317,23 @@ chrome.tabs.onCreated.addListener(function (c) {
     if (c) {
         var i = c.id;
         if (i && !(0 > i)) {
-            if (!c.openerTabId) {
-                var cl = c.windowId;
-                if (C && (D && C != cl)) {
-                	
-                    cl = A(D);
-                    p(i, cl);
-                    /** @type {boolean} */
-                    l[i] = true;
-                    return;
-                }
-            }
-            
             var url = "";
             if (c.pendingUrl)
             	url = c.pendingUrl;
             else
             	url = c.url;
-            
+
+            if (!c.openerTabId && consumePendingNewIdentityUrl(url)) {
+                pendingIdentityTabs[i] = true;
+                l[i] = "pending";
+                return;
+            }
+
             if (c.openerTabId && "chrome" != url.substr(0, 6)) {
-                cl = A(c.openerTabId);
-                p(i, cl);
+                var openerProfile = A(c.openerTabId);
+                if (openerProfile) {
+                    p(i, openerProfile);
+                }
                 if ("undefined" === typeof l[i]) {
                     l[i] = c.openerTabId;
                 }
@@ -537,10 +565,9 @@ chrome.runtime.onConnect.addListener(function (port) {
         if (3 == statement.type) {
             if (port.sender.tab && !disconnected) {
                 try {
-                    port.postMessage({
-                        type: 4,
-                        profile: A(port.sender.tab.id)
-                    });
+                    var payload = getProfilePayload(port.sender.tab.id);
+                    payload.type = 4;
+                    port.postMessage(payload);
                 } catch (e) {
                     debugLog('端口消息发送失败（页面可能进入bfcache）:', e.message);
                 }
@@ -559,14 +586,12 @@ chrome.runtime.onMessage.addListener(function (request, sender, sendResponse) {
             // Handle cross-origin request for profile
             var tabId = sender.tab ? sender.tab.id : null;
             if (tabId) {
-                var profile = A(tabId);
-                sendResponse({
-                    profile: profile
-                });
+                sendResponse(getProfilePayload(tabId));
                 return true;
             } else {
                 sendResponse({
-                    profile: ""
+                    profile: "",
+                    pending: false
                 });
                 return true;
             }
@@ -683,6 +708,13 @@ function A(key) {
     }
 }
 
+function getProfilePayload(tabId) {
+    return {
+        profile: A(tabId) || "",
+        pending: !!pendingIdentityTabs[tabId]
+    };
+}
+
 /**
  * @param {number} f
  * @param {string} c
@@ -691,6 +723,7 @@ function A(key) {
 function p(f, c) {
     if (c) {
         /** @type {string} */
+        delete pendingIdentityTabs[f];
         g[f] = c;
         B(f, c);
     }
@@ -772,13 +805,17 @@ function F(e) {
     if (e.linkUrl) {
         file = e.linkUrl;
     }
+    markPendingNewIdentityUrl(file);
     chrome.tabs.create({
         url: file
     }, function (props) {
         if (chrome.runtime.lastError) {
+            releasePendingNewIdentityUrl(file);
             debugLog('创建新标签页失败:', chrome.runtime.lastError.message);
             return;
         }
+        releasePendingNewIdentityUrl(file);
+        delete pendingIdentityTabs[props.id];
         p(props.id, props.id + "_@@@_");
     });
 }
